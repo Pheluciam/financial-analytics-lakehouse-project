@@ -10,6 +10,84 @@ so I can refer back to it in interviews and on future projects.
 
 ---
 
+## Project #3 lessons (`financial-analytics-lakehouse-project` — 2026-05-23+)
+
+Diagnosis → fix → lesson loops from Project #3 as they happen. Project #2
+content (Project summary onwards) continues unchanged below.
+
+### Build locally first, GitHub commit at session close (2026-05-23, Phase 1 session 1)
+
+**Diagnosis.** Mid-session, the GitHub repo was created and `git init` +
+`git remote add origin` run, with the bundled commit deliberately deferred
+to a later step. Phil flagged this as unprofessional — the repo had a
+dangling git-plumbing state with no commit pushed, splitting the ship-it
+moment across a dinner break.
+
+**Fix.** Reversed in-session: built the remaining session-1 docs (README,
+EXTRACT_PIPELINE.md update, PROJECT_CONTEXT.md session-log entry) all at
+once, then bundled `git add .` → `git commit` → `git push` as one atomic
+ship moment. Pre-dinner `git init` + remote config just sits under the
+first commit — invisible in repo history.
+
+**Lesson.** Senior-DE pattern: build everything locally first, THEN create
+remote and push in one atomic bundle at session close. Splitting GitHub
+repo creation from the inaugural commit across a break is amateur — repo
+looks empty to anyone visiting in the gap, and the workflow stutters at
+every context switch. Apply forward: NO mid-session git plumbing, only at
+session close.
+
+### Never screenshot AWS one-time credentials (2026-05-23, Phase 1 session 1)
+
+**Diagnosis.** During phil-admin IAM user creation, the Step 4 "Retrieve
+password" screen shows the auto-generated temp password in cleartext.
+Screenshotted and shared — password visible. Screenshot data persists in
+conversation context; anything visible in one is effectively exposed.
+
+**Fix (mitigations in place).** Force-change-on-first-sign-in was ticked
+during user creation, so the temp password died on first login. MFA
+enrolled immediately after the password change, narrowing the
+already-narrow exposure window further. Net real-world risk: low; the
+discipline gap is the actual lesson.
+
+**Lesson.** AWS one-time temp passwords + access keys must be copied to
+clipboard or a password manager ONLY, never screenshotted. When the AWS
+dialog shows the values: clipboard, then direct-to-`.env` (via the
+download-CSV flow for access keys). Never via screen capture. Anything
+visible in a screenshot is exposed — treat as such and rotate.
+
+### AWS Console region selector on Global-service pages (2026-05-23, Phase 1 session 1)
+
+**Diagnosis.** Tried to switch region from Sydney to us-east-1 via the
+top-right region dropdown while on IAM and Billing pages. Clicks on
+"N. Virginia" appeared to do nothing — region indicator stayed showing
+Sydney (or "Global"), no page reload, no visible state change.
+
+**Fix.** IAM and Billing are global services — they don't depend on region,
+so the dropdown has no visible effect on those pages. Navigated direct to
+S3 (region-bound), clicked the region dropdown there, picked N. Virginia
+— switched immediately.
+
+**Lesson.** Don't try to set region from a global-service page. Canonical
+pattern: navigate to the target region-bound service first, THEN switch
+region from the dropdown on that page. Saves multiple minutes of "why
+isn't this working" diagnosis on every region change.
+
+### Banked open items from session 1 (not lessons, but trackable)
+
+- **Free Plan cliff: 23 Nov 2026.** AWS account converts to paid OR
+  auto-closes when Free Plan expires (6 months from account creation, or
+  $200 credits exhausted, whichever first). Calendar reminder
+  ~mid-October 2026 to evaluate conversion-to-paid vs cached-demo-only
+  path. Demo durability principle 5 (repo + .pbix Import mode) means a
+  closed account doesn't kill the demo — only live AWS demos.
+- **phil-admin lacks IAM-access-to-billing.** Billing > Account page
+  showed permission-denied errors despite phil-admin having
+  `AdministratorAccess`. Root must toggle "IAM users and roles can view
+  billing information" in root's Account preferences. Not blocking for
+  Phase 1 work; worth fixing for clean billing review.
+
+---
+
 ## Project summary
 
 End-to-end data engineering portfolio project building a production-grade retail

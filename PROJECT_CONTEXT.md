@@ -130,23 +130,15 @@ session 2 scope, not this session.
   tutorial alignment. Cost difference at our 100-300 MB scale is ~$0.01
   per month vs Sydney; tutorial alignment is the dominant signal.
 
-**Notes / banked lessons (full LEARNINGS.md write-up at session 2 start).**
+**Lessons captured in LEARNINGS.md "Project #3 lessons" section.**
 
-- **Workflow discipline**: "build everything locally first, THEN create
-  GitHub repo + commit + push as one atomic ship moment at session
-  close." Burnt during this session when GitHub repo setup pre-dinner
-  left a dangling git-init-no-commit across an intended dinner break.
-  Phil flagged this as unprofessional and reversed the plan to finish
-  the session fully in one go.
-- **Credential handling**: AWS one-time temp passwords + access keys
-  must never appear in screenshots — copy via clipboard or password
-  manager only. Force-change-on-first-sign-in + immediate MFA enrollment
-  narrowed the exposure window when this happened with phil-admin's
-  temp password.
-- **AWS Console UI**: region selector on Global-service pages (IAM,
-  Billing, Account) does not take visible effect — only switches when
-  on a region-bound service like S3. Don't burn time trying to switch
-  region from a global page.
+Three diagnosis → fix → lesson loops banked this session: (1) build
+locally first, GitHub commit at session close (no mid-session git
+plumbing); (2) never screenshot AWS one-time credentials — clipboard or
+password manager only; (3) AWS Console region selector doesn't take
+effect on Global-service pages, only on region-bound services. Also
+banked two trackable open items: Free Plan cliff (23 Nov 2026) and
+phil-admin lacking IAM-access-to-billing.
 
 **NOT in this session — deferred.**
 
@@ -157,8 +149,9 @@ session 2 scope, not this session.
   same boto3 + auth chain working.
 - PROJECT_PLAN.md section 10 Free Tier wording update (12-month →
   6-month / $200-credits). Minor; banked.
-- LEARNINGS.md mid-session lessons capture (workflow + credentials +
-  Console UI). Banked for session 2 first-thing.
+- (Resolved in this session close) LEARNINGS.md lessons captured in
+  the new "Project #3 lessons" section — workflow, credentials, Console
+  UI. No longer deferred.
 
 **Blockers / surprises.** Region dropdown click intermittently
 unresponsive on Global-service pages — diagnosed in-session (only
