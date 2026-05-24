@@ -1,0 +1,14 @@
+# Project #3 — financial-analytics-lakehouse-project
+#
+# Minimum-version pinning during build. Generate a requirements-lock.txt
+# via `pip freeze` at Phase 6 ship for reproducible deploys.
+
+# AWS SDK for Python — includes botocore as a transitive dependency.
+boto3>=1.34.0
+
+# Loads .env into os.environ — secrets externalised per criterion 4 of
+# ENGINEERING_STANDARDS.md.
+python-dotenv>=1.0.0
+
+# HTTP client for SEC EDGAR — added session 2 ahead of extract_sec_edgar.py.
+requests>=2.31.0

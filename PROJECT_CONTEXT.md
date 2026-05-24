@@ -15,12 +15,12 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 1 — Bronze landing** (mid-phase, session 1 closed) |
-| Next phase | Phase 1 session 2 — `scripts/smoke_test_aws.py` (deferred from session 1) + `scripts/extract_sec_edgar.py` first draft |
-| Last session closed | 2026-05-23 (Phase 1 session 1) |
-| Last bundled commit | 2026-05-23 — Phase 1 session 1 bundle (AWS bootstrap + S3 + GitHub) |
+| Active phase | **Phase 1 — Bronze landing** (mid-phase, session 2 closed) |
+| Next phase | Phase 1 session 3 — 10-company sector-diverse extract test + Bronze verification suite + Glue Crawler bootstrap |
+| Last session closed | 2026-05-24 (Phase 1 session 2) |
+| Last bundled commit | 2026-05-24 — Phase 1 session 2 bundle (smoke test + SEC EDGAR extract + Apple 1-company test PASS) |
 | Active blockers | None |
-| Open questions | None blocking session 2 kickoff |
+| Open questions | None blocking session 3 kickoff |
 
 ---
 
@@ -88,6 +88,93 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-05-24 — Phase 1 session 2 — smoke test + SEC EDGAR extract + Apple 1-company test
+
+**Goal.** Ship the AWS smoke test (deferred from session 1) + first draft
+SEC EDGAR extract script + validate against Apple Inc (CIK 320193) per
+the step-up testing protocol. Bank session-2 lessons in
+TEACHING_PREFERENCES + LEARNINGS.
+
+**What landed.**
+
+- `scripts/smoke_test_aws.py` — connectivity proof for the AWS auth + S3
+  stack. Three-layer pattern (verbose chat walkthrough → clean on disk →
+  EXTRACT_PIPELINE section 3a updated). Structured logging with specific
+  exception classes, 5 distinct exit codes, dedicated `health_checks/`
+  prefix on S3, sha256-style separation of concerns (lifecycle policy
+  banked for Phase 6). 10-criteria audit: 10/10 PASS.
+- `scripts/extract_sec_edgar.py` — SEC EDGAR companyfacts → S3 Bronze.
+  argparse `--cik` (default Apple), polite ~8 req/sec rate limiter,
+  `urllib3.Retry` adapter for transient failures (5 attempts, expo
+  backoff), Hive-style partition key `zone=bronze/extract_date=YYYY-MM-DD/cik=XXXXXXXXXX/`,
+  10-digit CIK pad, sha256 fingerprint in S3 object metadata, 8 exit
+  codes. 10-criteria audit: 10/10 PASS.
+- `requirements.txt` — boto3, python-dotenv, requests (minimum-version
+  pinning during build; lock file deferred to Phase 6).
+- `.venv/` — local virtual environment created and gitignored (already
+  covered by session-1 `.gitignore`).
+- `PROJECT_PLAN.md` section 10 principle #4 — Free Tier wording fixed
+  (12-month Free Tier → 6-month Free Plan / $200 credits; account cliff
+  23 Nov 2026 explicit).
+- `EXTRACT_PIPELINE.md` — section 3a flipped from "deferred" to "shipped"
+  (smoke test); sections 4-8 expanded with extract script details, rate
+  limiter design, retry tuning, step-up testing protocol with Apple PASS.
+- `TEACHING_PREFERENCES.md` — four pace / depth calibration bullets
+  added under "Anything else Claude should know": (1) no inline code
+  formatting in explanations — re-lock; (2) verbose-in-chat depth =
+  block-level for Python, line-level for configs; (3) pace > teaching
+  density — Project #3 ships first, deep instruction deferred to 6-8
+  week training journey + interview prep; (4) standard response template
+  — brief bullet summary, light explanation, one optional direction
+  question, senior-DE default, Phil asks for depth.
+- `LEARNINGS.md` — two new entries under "Project #3 lessons": inline-code
+  formatting drift (diagnosis → fix → lesson) and process-density drift
+  (diagnosis → fix → lesson).
+
+**Apple 1-company test result.** PASSED 2026-05-24 12:26 local. ~3.6 MB
+raw JSON landed to `s3://phil-financial-analytics-lakehouse/zone=bronze/extract_date=2026-05-24/cik=0000320193/companyfacts.json`.
+sha256 prefix `31f9ab439840`. End-to-end ~4 seconds. AWS Console
+inspection confirmed: 5 metadata fields (Content-Type + cik + extracted-at
++ sha256 + source) and 3 tags (Purpose=Extract + Component=extract_sec_edgar
++ Source=SECEDGAR) all rendered correctly. S3 versioning audited via
+"Show versions" toggle — confirmed smoke test delete-marker preserved.
+
+**Decisions locked this session.** None new at the project-level — all
+session-2 decisions were within the locked Phase 0 stack. Calibrations
+locked at the working-style level (4 bullets in TEACHING_PREFERENCES).
+
+**Lessons captured in LEARNINGS.md "Project #3 lessons" section.**
+
+Two diagnosis → fix → lesson loops banked: (1) inline-code formatting
+in explanations breaks Phil's reading flow — re-locked the 2026-05-20
+rule with explicit violation categories; (2) process-density drift —
+session 2 drifted into Phase-0-style discussion density (multi-paragraph
+design call write-ups, 6 green-light questions before building); fixed
+with three coordinated TEACHING_PREFERENCES bullets locking the new
+ship-tight default template.
+
+**Blockers / surprises.** None. Smoke test ran clean first try; extract
+ran clean first try; AWS Console inspection confirmed every metadata
+field and tag we set.
+
+**NOT in this session — deferred.**
+
+- 10-company sector-diverse extract test → next session.
+- Full S&P 100 extract → session after.
+- Glue Crawler bootstrap → next session (or session after, depending on
+  whether Phil wants to crawl after the 10-company landing or after the
+  100-company freeze).
+- `sql/verify/01_phase1_bronze_verification.sql` → next session.
+- Pylance squiggle check on `scripts/*.py` in VS Code → flag from
+  10-criteria audit item 6; non-blocking, glance next time VS Code opens.
+
+**Next session.** Phase 1 session 3 — 10-company sector-diverse extract
++ rate-limiter scaling validation + Bronze verification suite first
+draft + (optional) Glue Crawler bootstrap if 10-company landing looks
+clean.
+
+---
 
 ### 2026-05-23 — Phase 1 session 1 — AWS bootstrap + S3 landing + GitHub repo
 
@@ -228,20 +315,32 @@ full-100 scale-up.
 
 ---
 
-## Files in the project (Phase 0 close inventory)
+## Files in the project (Phase 1 session 2 close inventory)
 
-Doc-shaped (all Phase 0):
+Doc-shaped:
 
 - `README.md` — TBD at Phase 6
-- `PROJECT_PLAN.md` ✓ (authored this session)
+- `PROJECT_PLAN.md` ✓
 - `PROJECT_CONTEXT.md` ✓ (this file)
-- `LEARNING_ROADMAP.md` ✓ (updated extensively this session)
-- `TEACHING_PREFERENCES.md` ✓ (updated this session — AI-disclosure + debug discipline)
-- `ENGINEERING_STANDARDS.md` ✓ (light context-note update this session)
-- `GLOSSARY.md` ✓ (carried forward from Project #2; Project #3-specific terms added as they appear)
-- `LEARNINGS.md` ✓ (carry-forward subsection populated this session)
+- `LEARNING_ROADMAP.md` ✓
+- `TEACHING_PREFERENCES.md` ✓
+- `ENGINEERING_STANDARDS.md` ✓
+- `GLOSSARY.md` ✓
+- `LEARNINGS.md` ✓
+- `EXTRACT_PIPELINE.md` ✓ (Phase 1 walkthrough; sections 3a + 4-8 shipped session 2)
 
-Code-shaped: none yet (Phase 1 onward).
+Code-shaped:
+
+- `scripts/smoke_test_aws.py` ✓ (session 2 — AWS auth + S3 round-trip proof)
+- `scripts/extract_sec_edgar.py` ✓ (session 2 — SEC EDGAR companyfacts → S3 Bronze)
+- `requirements.txt` ✓ (session 2 — boto3, python-dotenv, requests)
+
+Repo-config:
+
+- `.env` (gitignored)
+- `.env.example` ✓
+- `.gitignore` ✓
+- `.venv/` (gitignored, session 2)
 
 ---
 
@@ -256,5 +355,5 @@ Code-shaped: none yet (Phase 1 onward).
 
 ---
 
-*Last updated: 2026-05-23 (Phase 0 close — initial authoring). Append a
-session-log entry at every session close.*
+*Last updated: 2026-05-24 (Phase 1 session 2 close). Append a session-log
+entry at every session close.*

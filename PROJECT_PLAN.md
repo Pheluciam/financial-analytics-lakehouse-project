@@ -311,10 +311,14 @@ mechanics:
    execution history; live triggers are optional.
 3. **Power BI in Import mode at publication.** `.pbix` is fully self-contained
    at v1.0 freeze. Opens years later with no live AWS connection required.
-4. **AWS cost model preserves $0 idle.** S3 free tier for 12 months then ~$0.023/GB/month;
-   Athena pay-per-query at pennies per demo; Glue Data Catalog free up to 1M
-   objects; Step Functions ~$25 per 1M state transitions; no always-on RDS.
-   Per-demo cost ~$0.05; idle cost effectively $0.
+4. **AWS cost model preserves $0 idle.** AWS Free Plan covers the build for 6
+   months from account creation OR $200 in promotional credits (whichever
+   exhausts first; account `470439680370` cliff is 23 Nov 2026). Post-cliff
+   pay-as-you-go pricing: S3 ~$0.023/GB/month for ~100-300 MB of compressed
+   Parquet (~$0.01/month at our scale); Athena pay-per-query at pennies per
+   demo; Glue Data Catalog free up to 1M objects; Step Functions ~$25 per 1M
+   state transitions; no always-on RDS. Per-demo cost ~$0.05; idle cost
+   effectively $0 even on pay-as-you-go.
 5. **GitHub repo = canonical artifact.** Public repo with README, architecture
    diagram, screen recording, `.pbix`, `DEMO_RUNBOOK.md`. Even if AWS account
    expires, the repo proves the build.

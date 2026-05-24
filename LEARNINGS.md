@@ -72,6 +72,69 @@ pattern: navigate to the target region-bound service first, THEN switch
 region from the dropdown on that page. Saves multiple minutes of "why
 isn't this working" diagnosis on every region change.
 
+### Inline-code formatting in explanations breaks Phil's reading flow (2026-05-24, Phase 1 session 2)
+
+**Diagnosis.** During the session 2 smoke-test design discussion, Claude
+peppered explanatory prose with backticks — wrapping AWS service names,
+Python function names, env-var names, bucket prefixes, and config strings
+in inline code formatting throughout three multi-paragraph design calls.
+Phil flagged it: the orange/pink inline rendering against the dark chat
+background visually fragments the prose and disrupts his comprehension.
+The rule against this had been locked since 2026-05-20 in
+TEACHING_PREFERENCES.md line 92, but Claude defaulted to chat-conventional
+inline-code styling anyway because most assistant training treats inline
+backticks as standard for technical references.
+
+**Fix.** Two coordinated edits: (a) added a 2026-05-24 reinforcement bullet
+to TEACHING_PREFERENCES.md "Anything else Claude should know" explicitly
+calling out the violation categories — AWS service names, Python module /
+function names, AWS resource identifiers, env-var names, flag names, file
+extensions — and re-locking the rule as zero-tolerance for the rest of
+Project #3; (b) banked the diagnosis loop here so it's a referenceable
+artefact, not a one-off chat correction. Mental test stays: paste-able →
+code block; reference for reading → plain text.
+
+**Lesson.** TEACHING_PREFERENCES.md rules that conflict with assistant
+defaults need active reinforcement, not single-mention-and-trust. Phil's
+preferences against AI defaults (no inline code in prose, comments
+above-the-line not end-of-line, no bullet points in reports, plain-text
+references) all live in this category — they require Claude to consciously
+override its default rendering on every applicable message, not just once
+at session start. Carry-forward: at session kickoff, scan TEACHING_PREFERENCES
+for the rules that go against typical chat conventions and treat them as
+active checkpoints throughout the session, not load-once-and-coast.
+
+### Process-density drift — Phase-0 discussion mode bleeding into Phase-1 shipping (2026-05-24, Phase 1 session 2)
+
+**Diagnosis.** Session 2 drifted into Phase-0-style discussion density —
+multi-paragraph design call write-ups, 3-6 "green-light A/B/C?" questions
+before writing each script, comment-above-every-line walkthroughs, audit
+results as paragraphs instead of tick-box rows. Phil flagged it mid-session:
+"a lot of this is way too much... I don't wanna take seven hundred and three
+years to write something... let's get this project built because then there's
+another five projects I wanna build, and I wanna get a job."
+
+**Fix.** Three coordinated TEACHING_PREFERENCES.md updates locked the new
+standing default (all bulleted under "Anything else Claude should know"):
+(a) pace > teaching density — Project #3 ships first, deep instruction
+deferred to the 6-8 week training journey + interview mock sessions;
+(b) verbose-in-chat depth calibrated to block-level for Python, line-level
+only for config-style files; (c) standard response template — brief bullet
+summary, light explanation, one optional direction question, default to
+senior-DE professional on every other call, Phil asks for depth if he
+wants it. Audit results render as 10-row tick-box tables, not paragraphs.
+
+**Lesson.** Claude's chat defaults trend verbose because most assistant
+training treats thorough explanation as the safe move. For Phil's
+constraint (ship 8 projects to qualify for jobs before money runs out),
+verbose IS the wrong move — pace is the safety. The professional code
+itself stays at senior-DE quality (the deliverable is what gets judged);
+the conversation density around building it should match Project #2's
+tight ship pace, not Project-#3-Phase-0's deliberation density. Deep
+explanation has explicit homes: the training journey, mock interviews,
+and Phil saying "explain that more." Default elsewhere = tight bullets,
+move fast, ship.
+
 ### Banked open items from session 1 (not lessons, but trackable)
 
 - **Free Plan cliff: 23 Nov 2026.** AWS account converts to paid OR
