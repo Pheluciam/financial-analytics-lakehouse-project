@@ -12,3 +12,10 @@ python-dotenv>=1.0.0
 
 # HTTP client for SEC EDGAR — added session 2 ahead of extract_sec_edgar.py.
 requests>=2.31.0
+
+# dbt adapter for Amazon Athena — Phase 2 Silver Data Vault 2.0 modeling.
+# Pulls dbt-core, dbt-adapters, pyathena (the Athena driver), and the AWS
+# SDK stubs as transitive dependencies. dbt-athena-community is the
+# backwards-compat distribution name; the underlying package is dbt-athena,
+# now maintained by dbt Labs in the dbt-labs/dbt-adapters monorepo.
+dbt-athena-community>=1.10.1

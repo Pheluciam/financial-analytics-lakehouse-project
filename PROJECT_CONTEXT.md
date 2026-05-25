@@ -15,12 +15,12 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 1 CLOSED 2026-05-25 — Bronze frozen.** Phase 2 (Silver DV2.0 via dbt-athena) pending kickoff. |
-| Next phase | Phase 2 session 1 — dbt-athena scaffolding kickoff. ~90-150 min. Scope: pip install dbt-athena-community, IAM permission expansion (dbt write to Glue Catalog + Athena workgroup + S3 silver/gold zones), Iceberg vs Parquet materialization decision, dbt project init (dbt_project.yml, profiles.yml.example, packages.yml, sources.yml), first staging model (stg_sec_edgar__companyfacts exercising json_extract_* on Bronze), dbt run + verify Silver Parquet lands in S3, DBT_PIPELINE.md stub, 10-criteria audit. |
-| Last session closed | 2026-05-25 (Phase 1 session 4 — CLOSE) |
-| Last bundled commit | 2026-05-25 — Phase 1 session 4 bundle (full S&P 100 extract PASSED, scripts/verify_bronze_s3_metadata.py shipped 5/5 PASS, SQL verify refactored 11→100 scale 6/6 PASS, Phase 1 close-out structural audit clean, EXTRACT_PIPELINE section 11 added) |
+| Active phase | **Phase 2 in progress.** Session 1 CLOSED 2026-05-25 — dbt-athena scaffolding shipped, first staging model live, end-to-end pipeline proven (Bronze → staging view → Glue Catalog → Athena query). |
+| Next phase | Phase 2 session 2 — first intermediate model. ~60-120 min. Scope: solve the raw-JSON-read pattern for `facts` (json_extract_* against Bronze JSON files), build first intermediate model performing XBRL canonical-concept reconciliation (Revenues / SalesRevenueNet / Revenue → canonical), update dbt_project.yml to re-add intermediate layer config, second LEARNINGS bank pass, session close. |
+| Last session closed | 2026-05-25 (Phase 2 session 1 — CLOSE) |
+| Last bundled commit | 2026-05-25 — Phase 2 session 1 bundle (dbt-athena adapter + phil-dbt IAM user with Customer Managed Policy + dbt project scaffold + first staging model PASSING + DBT_PIPELINE.md stub + 4 new LEARNINGS entries + TEACHING_PREFERENCES third re-lock on paste-able discipline) |
 | Active blockers | None |
-| Open questions | dbt-athena Iceberg vs Parquet materialization (to be locked at Phase 2 session 1 kickoff per PROJECT_PLAN.md section 14) |
+| Open questions | Raw-JSON-read pattern for Bronze `facts` object — needed in Phase 2 session 2 for json_extract on canonical-concept reconciliation. Three architectural options identified (revise Bronze DDL, second Athena table over same S3 location, dbt-athena raw-S3 read macro); to be locked at session 2 kickoff. |
 
 ---
 
@@ -88,6 +88,144 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-05-25 — Phase 2 session 1 — dbt-athena scaffolding + first staging model + four LEARNINGS banked
+
+**Goal.** Stand up dbt-athena end-to-end with a dedicated IAM identity,
+prove the pipeline (Bronze source → staging view → Glue Catalog → Athena
+query) with a first minimal-viable staging model, and bank a Phase 2
+session 2 starting point. Iceberg vs Parquet materialization design call
+locked at session start (Iceberg, post web-search-verify on adapter
+maturity).
+
+**What landed.**
+
+- **dbt-athena adapter installed.** `dbt-athena-community>=1.10.1` added
+  to `requirements.txt`. Pulls dbt-core 1.11.11, dbt-adapters 1.24.2,
+  pyathena 3.31.0 as transitive deps. Patch-ahead of the
+  1.10.0/1.11.8 line the web-search returned (expected for May 2026).
+- **Iceberg vs Parquet locked → Iceberg.** Web-search-verify against
+  docs.getdbt.com + dbt-labs/dbt-adapters + docs.aws.amazon.com confirmed
+  adapter is dbt-Labs maintained, stable, current. Iceberg's ACID merge
+  (only available with Iceberg, not Hive/Parquet) is the natural fit for
+  Data Vault 2.0 satellite SCD-2 history. Operational edge cases the
+  search surfaced (concurrent-run data loss, DROP TABLE timeout, orphan
+  S3 files) all require parallel dbt runs or production-scale concurrency
+  — none apply at portfolio scale.
+- **Dedicated `phil-dbt` IAM user provisioned.** Customer Managed Policy
+  `lakehouse-dbt-runtime-access` (JSON in `iam/lakehouse_dbt_runtime_policy.json`).
+  Scoped to: Athena workgroup execute on `wg_financial_analytics`, Glue
+  Catalog R/W on `financial_analytics_bronze` + `financial_analytics_silver`,
+  S3 R on `zone=bronze/`, S3 R/W on `zone=silver/` and `athena-results/`.
+  Console access disabled — programmatic-only. Initial attempt as
+  inline-on-user policy failed against the 2048 non-whitespace character
+  cap; pivoted to Customer Managed (6144 char cap + reusable + versioned).
+  Banked as LEARNINGS entry.
+- **Glue database `financial_analytics_silver` created** alongside
+  `financial_analytics_bronze` (Phase 1).
+- **`.env.example` extended** with placeholders for `AWS_DBT_ACCESS_KEY_ID`
+  and `AWS_DBT_SECRET_ACCESS_KEY`. Two-identity convention now documented
+  in the template: `phil-admin` for Phase 1 extract/verify scripts,
+  `phil-dbt` for Phase 2+ dbt runtime.
+- **dbt project scaffold shipped.** `dbt/dbt_project.yml`,
+  `dbt/profiles.yml.example`, `dbt/packages.yml` (dbt_utils 1.x),
+  `dbt/models/staging/_sources.yml`. Folder layout: staging/
+  intermediate/ warehouse/ marts/ (intermediate/warehouse/marts hold
+  `.gitkeep` until first model lands).
+- **First staging model.** `dbt/models/staging/stg_sec_edgar__companyfacts.sql`
+  — materialized as view, three columns: cik (string), extract_date
+  (DATE, cast from partition-projection string), entity_name (renamed
+  from openx-mapped entityname). Path A picked over json_extract scope
+  per "staging passes through, intermediate does the heavy work" senior-DE
+  pattern.
+- **IDE/runtime delta handling shipped.** `.vscode/settings.json` +
+  `.vscode/dbt_project.permissive.schema.json` override SchemaStore's
+  dbt-core-only schema for `dbt_project.yml` with a local empty schema.
+  Documented intentional bypass per ENGINEERING_STANDARDS criterion 6.
+  `flags.warn_error_options.silence` in `dbt_project.yml` silences
+  `CustomKeyInConfigDeprecation` + `DeprecationsSummary` false positives
+  on adapter-specific keys (linked to dbt-core issues #12314, #12342,
+  #12355, #12087).
+- **dotenv CLI wrapper convention locked.** `python-dotenv[cli]` extras
+  installed; every dbt invocation in this session ran as
+  `dotenv -f ..\.env run -- dbt <command>` from the `dbt/` subdirectory.
+  Documented in DBT_PIPELINE.md section 5.
+- **End-to-end pipeline verified.** `dbt parse` clean (0 errors, 0
+  warnings). `dbt run` PASS=1 WARN=0 ERROR=0 SKIP=0 NO-OP=0 TOTAL=1.
+  Glue Catalog visual check confirmed view registration with three
+  columns. Athena functional smoke query returned 2 rows for Apple
+  (CIK 0000320193) across both extract_date partitions, entity_name
+  "Apple Inc." both rows.
+- **DBT_PIPELINE.md stub shipped** at repo root — 10 sections covering
+  pipeline architecture, layer responsibilities, IAM identity separation,
+  profiles.yml + .env contract, dotenv wrapper convention, session 1
+  deliverables, verification surface. Sections 7 (intermediate) and 8
+  (warehouse DV2.0) marked as Phase 2 session 2+ scope.
+- **TEACHING_PREFERENCES.md third re-lock** on paste-able discipline.
+  Two violations within session 1 (step 3d + step 4) prompted Phil to
+  request a different enforcement mechanism. Locked: mandatory pre-send
+  backtick scan + binary mental test ("am I telling Phil to paste this?
+  → own code block; else → plain text, no inline backticks").
+- **LEARNINGS.md** — four new "Project #3 lessons" entries banked:
+  (1) AWS IAM inline-policy 2048-char cap + ASCII-only description
+  sub-note; (2) paste-able discipline third re-lock with mechanical
+  pre-send check; (3) criterion-6 reflex on every new tool/adapter
+  config file — anticipate IDE-vs-runtime drift proactively, ship
+  bypass directives at file creation; (4) dbt does NOT auto-load .env
+  files, python-dotenv[cli] wrapper is the cross-platform pattern.
+
+**10-criteria audit at session close.** 10/10 PASS across the deliverable
+bundle (iam/lakehouse_dbt_runtime_policy.json + .vscode/* + dbt/* +
+staging model). Tick-box table delivered in chat at close.
+
+**Decisions locked this session.**
+
+- **dbt-athena Iceberg vs Parquet → Iceberg** (Silver materialization,
+  per dbt-labs maintenance state + Iceberg-only merge incremental
+  strategy fitting DV2.0 SCD-2).
+- **IAM separation pattern locked across the rest of Project #3.**
+  `phil-admin` for human/Phase-1 work; `phil-dbt` for dbt automation
+  with Customer Managed Policy lakehouse-dbt-runtime-access. Future
+  Step Functions execution role (Phase 3) will follow the same
+  Customer-Managed-from-the-start pattern.
+- **Staging materialization defaults to view** per dbt_project.yml.
+  Re-evaluate (promote to table) only if scan cost exceeds budget.
+- **dotenv CLI wrapper as the project standard** for every dbt
+  invocation. Reflected in DBT_PIPELINE.md and any future CI YAML.
+
+**Blockers / surprises.** No architectural blockers; four operational
+surprises, all banked in LEARNINGS:
+
+- AWS IAM 2048-char inline policy cap (vs ~3KB policy size).
+- VS Code SchemaStore schema misfiring on adapter-specific keys (red
+  squigglies on valid dbt config).
+- dbt-core 1.11 emits false-positive `CustomKeyInConfigDeprecation` on
+  adapter-supported keys per multiple open dbt-labs/dbt-core issues.
+- dbt-core does not auto-load .env files; needs explicit wrapper.
+
+**NOT in this session — deferred.**
+
+- json_extract pattern against Bronze `facts` JSON → Phase 2 session 2.
+- First intermediate model (XBRL canonical-concept reconciliation) →
+  Phase 2 session 2.
+- Re-adding intermediate / warehouse / marts layer defaults to
+  dbt_project.yml — happens as each layer's first model lands.
+- Iceberg Silver tables (first warehouse model) → Phase 2 session 3+.
+- Schema + data tests on the staging model → next time the model is
+  touched or once intermediate consumers exist.
+- VS Code venv auto-activate config → Phase 6 polish.
+
+**Next session.** Phase 2 session 2 — first intermediate model. Solve
+the raw-JSON-read pattern for Bronze `facts` first (three options on
+the table: revise Bronze DDL, second Athena table over same S3
+location, dbt-athena raw-S3 read macro). Then build first intermediate
+model performing XBRL canonical-concept reconciliation for ~3-5
+representative concepts (Revenues, NetIncomeLoss, Assets, Liabilities)
+across the S&P 100. Re-add intermediate layer defaults to
+dbt_project.yml. Smoke-query the intermediate model from Athena.
+Estimated 60-120 min.
+
+---
 
 ### 2026-05-25 — Phase 1 session 4 — 100-company extract + boto3 S3 metadata verify + Phase 1 CLOSE-OUT (Bronze frozen)
 
@@ -453,42 +591,61 @@ full-100 scale-up.
 
 ---
 
-## Files in the project (Phase 1 close inventory — Bronze frozen 2026-05-25)
+## Files in the project (Phase 2 session 1 close inventory — 2026-05-25)
 
 Doc-shaped:
 
-- `README.md` ✓ (stub; polish at Phase 6 — Status line current as of Phase 1 close)
+- `README.md` ✓ (stub; polish at Phase 6 — Status line current as of Phase 1 close, will refresh at Phase 2 close)
 - `PROJECT_PLAN.md` ✓
 - `PROJECT_CONTEXT.md` ✓ (this file)
 - `LEARNING_ROADMAP.md` ✓
-- `TEACHING_PREFERENCES.md` ✓
+- `TEACHING_PREFERENCES.md` ✓ (Phase 2 session 1 — third re-lock on paste-able discipline)
 - `ENGINEERING_STANDARDS.md` ✓
 - `GLOSSARY.md` ✓
-- `LEARNINGS.md` ✓ (13 Project #3 entries — 10 sessions 1-3 + 3 session 4)
-- `EXTRACT_PIPELINE.md` ✓ (Phase 1 walkthrough; sections 1-8 shipped sessions 1-2, sections 9-10 shipped session 3, section 11 + renumbered References 12 shipped session 4)
+- `LEARNINGS.md` ✓ (17 Project #3 entries — 10 sessions 1-3 + 3 session 4 + 4 Phase 2 session 1)
+- `EXTRACT_PIPELINE.md` ✓ (Phase 1 walkthrough — frozen at Phase 1 close)
+- `DBT_PIPELINE.md` ✓ (Phase 2 session 1 — sections 1-6, 9, 10 shipped; sections 7-8 expand at Phase 2 sessions 2-3+)
 
 Code-shaped:
 
-- `scripts/smoke_test_aws.py` ✓ (session 2 — AWS auth + S3 round-trip proof)
-- `scripts/extract_sec_edgar.py` ✓ (session 2 — SEC EDGAR companyfacts → S3 Bronze; 1 → 10 → 100 company step-up all PASSED sessions 2-4)
-- `scripts/verify_bronze_s3_metadata.py` ✓ (session 4 — boto3 paginated list + head_object verify; 5/5 PASS at full S&P 100 scale)
-- `sql/ddl/01_create_bronze_tables.sql` ✓ (session 3 — manual Bronze table DDL with partition projection)
-- `sql/verify/01_phase1_bronze_verification.sql` ✓ (session 3, refactored session 4 for 100-CIK scale — 6/6 PASS)
-- `requirements.txt` ✓ (session 2 — boto3, python-dotenv, requests)
+- `scripts/smoke_test_aws.py` ✓ (Phase 1 session 2)
+- `scripts/extract_sec_edgar.py` ✓ (Phase 1 sessions 2-4)
+- `scripts/verify_bronze_s3_metadata.py` ✓ (Phase 1 session 4)
+- `sql/ddl/01_create_bronze_tables.sql` ✓ (Phase 1 session 3)
+- `sql/verify/01_phase1_bronze_verification.sql` ✓ (Phase 1 sessions 3-4)
+- `iam/lakehouse_dbt_runtime_policy.json` ✓ (Phase 2 session 1 — Customer Managed Policy JSON for phil-dbt)
+- `dbt/dbt_project.yml` ✓ (Phase 2 session 1 — project config + flags.warn_error_options.silence)
+- `dbt/profiles.yml.example` ✓ (Phase 2 session 1 — env_var template, real profiles.yml gitignored)
+- `dbt/packages.yml` ✓ (Phase 2 session 1 — dbt_utils 1.x)
+- `dbt/models/staging/_sources.yml` ✓ (Phase 2 session 1 — Bronze source declaration)
+- `dbt/models/staging/stg_sec_edgar__companyfacts.sql` ✓ (Phase 2 session 1 — first staging model, PASSING)
+- `dbt/models/intermediate/.gitkeep` (Phase 2 session 1 — placeholder until session 2 first intermediate model)
+- `dbt/models/warehouse/.gitkeep` (Phase 2 session 1 — placeholder until session 3+ first DV2.0 model)
+- `dbt/models/marts/.gitkeep` (Phase 2 session 1 — placeholder until Phase 4 first mart model)
+- `.vscode/settings.json` ✓ (Phase 2 session 1 — yaml.schemas override for dbt_project.yml)
+- `.vscode/dbt_project.permissive.schema.json` ✓ (Phase 2 session 1 — empty schema referenced by settings.json)
+- `requirements.txt` ✓ (Phase 1 session 2; Phase 2 session 1 — added dbt-athena-community)
 
 AWS infrastructure (provisioned via Console, not yet captured as IaC):
 
-- IAM role `AWSGlueServiceRole-financial-analytics-lakehouse` (session 3 — Glue + custom S3 read inline)
-- Glue database `financial_analytics_bronze` (session 3)
-- Glue Crawler `crawler_bronze_sec_edgar` (session 3 — bootstrapped; failed against Bronze JSON, retained for Silver/Gold)
-- Athena workgroup `wg_financial_analytics` (session 3 — Customer managed results, override-client-settings ON)
+- IAM user `phil-admin` (Phase 1 session 1 — AdministratorAccess; Phase 1 scripts)
+- IAM user `phil-dbt` (Phase 2 session 1 — Customer Managed Policy lakehouse-dbt-runtime-access; dbt-athena runtime)
+- IAM Customer Managed Policy `lakehouse-dbt-runtime-access` (Phase 2 session 1)
+- IAM role `AWSGlueServiceRole-financial-analytics-lakehouse` (Phase 1 session 3 — Glue + custom S3 read inline)
+- Glue database `financial_analytics_bronze` (Phase 1 session 3)
+- Glue database `financial_analytics_silver` (Phase 2 session 1)
+- Glue Crawler `crawler_bronze_sec_edgar` (Phase 1 session 3 — retained scaffolding)
+- Athena workgroup `wg_financial_analytics` (Phase 1 session 3)
+- Glue Catalog view `financial_analytics_silver.stg_sec_edgar__companyfacts` (Phase 2 session 1 — dbt-managed)
 
 Repo-config:
 
-- `.env` (gitignored)
-- `.env.example` ✓
-- `.gitignore` ✓
-- `.venv/` (gitignored, session 2)
+- `.env` (gitignored — phil-admin + phil-dbt credential blocks)
+- `.env.example` ✓ (Phase 1 session 1; Phase 2 session 1 — added AWS_DBT_* placeholders)
+- `.gitignore` ✓ (Phase 1 session 1; Phase 2 session 1 — added dbt runtime artifacts + .vscode partial allow)
+- `.venv/` (gitignored, Phase 1 session 2; Phase 2 session 1 — added dbt-athena-community + python-dotenv[cli])
+- `dbt/profiles.yml` (gitignored, Phase 2 session 1 — copy of dbt/profiles.yml.example)
+- `dbt/dbt_packages/`, `dbt/target/`, `dbt/logs/` (gitignored, Phase 2 session 1 — dbt runtime artifacts)
 
 ---
 
@@ -503,5 +660,6 @@ Repo-config:
 
 ---
 
-*Last updated: 2026-05-25 (Phase 1 session 4 close — Bronze frozen, Phase 1
-COMPLETE). Append a session-log entry at every session close.*
+*Last updated: 2026-05-25 (Phase 2 session 1 close — dbt-athena scaffolding
+landed, first staging model PASSING, end-to-end pipeline proven). Append
+a session-log entry at every session close.*

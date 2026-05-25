@@ -1,0 +1,72 @@
+# dbt project config — Project #3 financial-analytics-lakehouse-project
+# Phase 2 onwards. Walkthrough: DBT_PIPELINE.md at repo root.
+#
+# IDE schema note. The VS Code YAML extension's SchemaStore-supplied
+# dbt_project-latest.json schema is dbt-core only and would flag the
+# adapter-specific +table_type, +format, +table_properties keys (dbt-athena
+# specifics) as unknown. Override lives in .vscode/settings.json which
+# points VS Code at .vscode/dbt_project.permissive.schema.json for this
+# file. dbt's own parser is the source of truth for config validity here;
+# dbt parse catches any real errors. Per ENGINEERING_STANDARDS criterion 6.
+
+# Project name — must be a Python identifier (no hyphens). Referenced by
+# every model config block (e.g. models.financial_analytics.staging.+materialized)
+name: "financial_analytics"
+version: "1.0.0"
+config-version: 2
+
+# Links this project to the matching named profile in profiles.yml
+profile: "financial_analytics_athena"
+
+# Suppress dbt-core 1.11 CustomKeyInConfigDeprecation false positives.
+# dbt-core's deprecation check fires on adapter-specific NESTED config keys
+# (table_properties.format_version for dbt-athena Iceberg here) even though
+# the key is documented and adapter-supported. Confirmed false positive —
+# see dbt-labs/dbt-core issues #12314, #12342, #12355, #12087. Moving
+# format_version under config.meta (the warning's suggested fix) would
+# break dbt-athena's Iceberg materialization because dbt-athena reads
+# table_properties from config.table_properties, not config.meta. Silencing
+# here preserves ENGINEERING_STANDARDS criterion-6 zero-warning hygiene
+# until dbt-labs ships the fix. Revisit on the next dbt-core minor bump.
+flags:
+  warn_error_options:
+    silence:
+      - CustomKeyInConfigDeprecation
+      - DeprecationsSummary
+
+# Folder paths — dbt defaults retained for portability
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+# Build artifacts — wiped by `dbt clean`. All gitignored.
+clean-targets:
+  - "target"
+  - "dbt_packages"
+  - "logs"
+
+# Default materializations per layer. Per-model configs in {{ config(...) }}
+# blocks override these defaults. Models drive configs — only layers with
+# actual models declare defaults here. Unused-layer configs trigger dbt's
+# UnusedResourceConfigPath warning and are removed until the matching
+# models land. Re-added at the session that introduces each layer:
+#
+# staging — view: cheap, no S3 writes, parses Bronze JSON on every read.
+#   ACTIVE: Phase 2 session 1 onwards.
+# intermediate — view: cleaning + XBRL canonical-concept reconciliation.
+#   TO ADD: Phase 2 session 2 when first intermediate model lands.
+# warehouse — iceberg table: Data Vault 2.0 hubs/links/satellites need ACID
+#   merge for SCD-2 satellite history (only available with Iceberg).
+#   TO ADD: Phase 2 session 3+ when first hub/link/satellite lands.
+# marts — iceberg table: Gold marts persisted for Power BI consumption.
+#   TO ADD: Phase 4 when first mart lands.
+#
+# Iceberg format_version 2 maintains compatibility between tables created
+# by Athena (Trino) and any future tables created by Spark or other engines.
+models:
+  financial_analytics:
+    staging:
+      +materialized: view

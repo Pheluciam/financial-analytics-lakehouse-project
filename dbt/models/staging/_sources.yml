@@ -1,0 +1,47 @@
+# Bronze layer source declarations — referenced by staging models via
+# {{ source('bronze', 'sec_edgar_companyfacts') }}.
+#
+# Upstream contract: tables here are populated by Phase 1 deliverables
+# (scripts/extract_sec_edgar.py + sql/ddl/01_create_bronze_tables.sql)
+# and verified by scripts/verify_bronze_s3_metadata.py +
+# sql/verify/01_phase1_bronze_verification.sql. Bronze is immutable per
+# demo-durability principle 1 (PROJECT_PLAN.md section 10).
+
+version: 2
+
+sources:
+  - name: bronze
+    description: |
+      Raw SEC EDGAR companyfacts JSON, landed by the Phase 1 extract
+      pipeline. Append-only by extract_date partition; the system of
+      record snapshot for the project. The SEC EDGAR API is NOT in the
+      live demo path post Phase 1 close.
+    database: awsdatacatalog
+    schema: financial_analytics_bronze
+    tables:
+      - name: sec_edgar_companyfacts
+        description: |
+          One row per (extract_date, cik) partition. Hive-style partition
+          keys. Heterogeneous JSON structure under facts.us-gaap and
+          facts.dei across companies — parsed by staging models via
+          json_extract_* against the raw JSON files. The full facts
+          object is intentionally NOT declared as a Bronze column (the
+          Glue Crawler 128KB column-type-definition limit broke against
+          NVIDIA's filing; manual DDL excludes facts and pushes parsing
+          to Silver).
+        columns:
+          - name: entityname
+            description: |
+              Company name from JSON entityName field. Mapped via the
+              openx JsonSerDe mapping.entityname property in the Bronze
+              DDL (SerDe lowercases column names by default).
+          - name: extract_date
+            description: |
+              Partition key — date the extract ran (YYYY-MM-DD string).
+              String type because partition projection is configured as
+              type=date with explicit format yyyy-MM-dd.
+          - name: cik
+            description: |
+              Partition key — 10-digit zero-padded SEC Central Index Key.
+              Injected partition projection — every WHERE clause must
+              filter on cik or partition pruning fails.

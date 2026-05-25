@@ -1,0 +1,9 @@
+# dbt package dependencies. Install via: dbt deps
+#
+# dbt_utils — universal helpers (generate_surrogate_key, pivot, date spine).
+# Required for Data Vault 2.0 hash keys on hubs/links/satellites in Phase 2
+# warehouse models. Version range pins to the 1.x line; upper bound catches
+# breaking changes if a 2.0 ever ships.
+packages:
+  - package: dbt-labs/dbt_utils
+    version: [">=1.3.0", "<2.0.0"]

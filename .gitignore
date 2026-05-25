@@ -26,8 +26,11 @@ ENV/
 # Jupyter checkpoint dirs
 .ipynb_checkpoints/
 
-# IDE / editor scratch
-.vscode/
+# IDE / editor scratch — exclude .vscode/ runtime junk but un-ignore the
+# two project-shared config files (standard portfolio-repo convention).
+.vscode/*
+!.vscode/settings.json
+!.vscode/dbt_project.permissive.schema.json
 .idea/
 *.swp
 *.swo
@@ -41,3 +44,10 @@ desktop.ini
 data/
 output/
 scratch/
+
+# dbt — local-only runtime artefacts. profiles.yml carries env_var() refs
+# but is excluded out of an abundance of caution; .example committed instead.
+dbt/profiles.yml
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/

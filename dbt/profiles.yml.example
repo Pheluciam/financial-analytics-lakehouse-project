@@ -1,0 +1,45 @@
+# dbt profiles template — copy to dbt/profiles.yml (gitignored) before
+# first dbt run. The real profiles.yml resolves env vars from .env at
+# runtime via Jinja env_var(); the .example committed here documents the
+# shape only and is safe to share.
+#
+# Reference: https://docs.getdbt.com/docs/local/connect-data-platform/athena-setup
+
+financial_analytics_athena:
+  target: dev
+  outputs:
+    dev:
+      type: athena
+
+      # AWS region — locked at S3 bucket creation (Phase 1 session 1)
+      region_name: us-east-1
+
+      # AWS credentials — phil-dbt IAM user, scoped to the customer managed
+      # policy lakehouse-dbt-runtime-access. Distinct from phil-admin, which
+      # the Phase 1 extract/verify scripts use. Resolved from .env via env_var().
+      aws_access_key_id: "{{ env_var('AWS_DBT_ACCESS_KEY_ID') }}"
+      aws_secret_access_key: "{{ env_var('AWS_DBT_SECRET_ACCESS_KEY') }}"
+
+      # Glue database — default schema for materialized models (Silver layer).
+      # Per-layer overrides happen in dbt_project.yml or per-model config blocks.
+      schema: financial_analytics_silver
+
+      # Glue Data Catalog — the default account-level catalog.
+      database: awsdatacatalog
+
+      # Athena workgroup — created Phase 1 session 3. Customer-managed query
+      # results location and engine v3 (required for Iceberg merge strategy).
+      work_group: wg_financial_analytics
+
+      # Athena writes intermediate query results here. Must match the
+      # workgroup's configured results location.
+      s3_staging_dir: s3://phil-financial-analytics-lakehouse/athena-results/
+
+      # Override where materialized table data files land. Without this,
+      # dbt-athena writes table data under s3_staging_dir, mixing query
+      # results with table data. Project convention: zone=silver/.
+      s3_data_dir: s3://phil-financial-analytics-lakehouse/zone=silver/
+
+      # Parallel model execution. 4 matches typical laptop core count and
+      # caps concurrent Athena queries (each one costs pennies-per-scan).
+      threads: 4

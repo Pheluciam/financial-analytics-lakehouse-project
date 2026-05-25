@@ -1,0 +1,18 @@
+{
+    // Override SchemaStore's automatic binding of dbt_project.yml to its
+    // dbt_project-latest.json schema. That schema is dbt-core only and
+    // flags adapter-specific keys (+table_type, +format, +table_properties
+    // from dbt-athena) as unknown — false positives the IDE has no way to
+    // resolve because SchemaStore doesn't know which adapter is installed.
+    //
+    // Pointing at our local permissive schema (an empty JSON Schema
+    // document, which validates anything) silences the squigglies without
+    // depending on third-party URLs. dbt's own parser is the source of
+    // truth for config validity here; dbt parse catches any real errors.
+    //
+    // Per ENGINEERING_STANDARDS criterion 6 (Dev environment hygiene):
+    // documented intentional bypass, version controlled, portfolio-shared.
+    "yaml.schemas": {
+        "./.vscode/dbt_project.permissive.schema.json": "dbt/dbt_project.yml"
+    }
+}

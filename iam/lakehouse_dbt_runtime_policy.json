@@ -1,0 +1,118 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AthenaWorkgroupExecution",
+            "Effect": "Allow",
+            "Action": [
+                "athena:StartQueryExecution",
+                "athena:StopQueryExecution",
+                "athena:GetQueryExecution",
+                "athena:GetQueryResults",
+                "athena:GetQueryResultsStream",
+                "athena:BatchGetQueryExecution",
+                "athena:GetWorkGroup",
+                "athena:ListWorkGroups"
+            ],
+            "Resource": "arn:aws:athena:us-east-1:470439680370:workgroup/wg_financial_analytics"
+        },
+        {
+            "Sid": "AthenaCatalogDiscovery",
+            "Effect": "Allow",
+            "Action": [
+                "athena:ListDataCatalogs",
+                "athena:GetDataCatalog",
+                "athena:ListDatabases",
+                "athena:GetDatabase",
+                "athena:ListTableMetadata",
+                "athena:GetTableMetadata"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "GlueCatalogRead",
+            "Effect": "Allow",
+            "Action": [
+                "glue:GetCatalog",
+                "glue:GetDatabases"
+            ],
+            "Resource": "arn:aws:glue:us-east-1:470439680370:catalog"
+        },
+        {
+            "Sid": "GlueDatabaseReadWrite",
+            "Effect": "Allow",
+            "Action": [
+                "glue:GetDatabase",
+                "glue:GetDatabases",
+                "glue:GetTable",
+                "glue:GetTables",
+                "glue:GetTableVersion",
+                "glue:GetTableVersions",
+                "glue:CreateTable",
+                "glue:UpdateTable",
+                "glue:DeleteTable",
+                "glue:BatchDeleteTable",
+                "glue:GetPartition",
+                "glue:GetPartitions",
+                "glue:BatchGetPartition",
+                "glue:CreatePartition",
+                "glue:BatchCreatePartition",
+                "glue:UpdatePartition",
+                "glue:DeletePartition",
+                "glue:BatchDeletePartition"
+            ],
+            "Resource": [
+                "arn:aws:glue:us-east-1:470439680370:catalog",
+                "arn:aws:glue:us-east-1:470439680370:database/financial_analytics_bronze",
+                "arn:aws:glue:us-east-1:470439680370:database/financial_analytics_silver",
+                "arn:aws:glue:us-east-1:470439680370:table/financial_analytics_bronze/*",
+                "arn:aws:glue:us-east-1:470439680370:table/financial_analytics_silver/*"
+            ]
+        },
+        {
+            "Sid": "S3BucketDiscovery",
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation"
+            ],
+            "Resource": "arn:aws:s3:::phil-financial-analytics-lakehouse"
+        },
+        {
+            "Sid": "S3BronzeRead",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion"
+            ],
+            "Resource": "arn:aws:s3:::phil-financial-analytics-lakehouse/zone=bronze/*"
+        },
+        {
+            "Sid": "S3SilverReadWrite",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:DeleteObjectVersion",
+                "s3:AbortMultipartUpload",
+                "s3:ListMultipartUploadParts"
+            ],
+            "Resource": "arn:aws:s3:::phil-financial-analytics-lakehouse/zone=silver/*"
+        },
+        {
+            "Sid": "S3AthenaResultsReadWrite",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:AbortMultipartUpload",
+                "s3:ListMultipartUploadParts"
+            ],
+            "Resource": "arn:aws:s3:::phil-financial-analytics-lakehouse/athena-results/*"
+        }
+    ]
+}
