@@ -237,29 +237,191 @@ Per ENGINEERING_STANDARDS.md criterion 9 + LEARNINGS.md Project #2 carry-forward
 1. **1 company — SHIPPED 2026-05-24.** Apple Inc, CIK 320193. PASSED.
    Rate limiter behaved against real SEC, JSON shape validated, S3
    landing partition correct, sha256 fingerprint preserved.
-2. **10 companies — next session.** Sector-diverse selection across
-   financials, tech, healthcare, energy, consumer. Confirms limiter
-   holds at moderate scale + no SEC rejections + per-CIK loop scales
-   linearly.
-3. **100 companies — session after that.** Full S&P 100 roster (current
+2. **10 companies — SHIPPED 2026-05-25.** Sector-diverse selection across
+   financials (JPM 19617, BAC 70858), tech (MSFT 789019, NVDA 1045810),
+   healthcare (JNJ 200406, UNH 731766), energy (XOM 34088, CVX 93410),
+   consumer (WMT 104169, PG 80424). Wall-clock ~12-15 seconds for all 10
+   fetches at 0.12s rate-limit interval. Rate limiter held cleanly — no
+   429s, no SEC rejections. Per-CIK loop scaled linearly. All 11 partition
+   combos (10 from today + Apple from session 2) discoverable through
+   partition projection on the Bronze table (see section 9 below).
+3. **100 companies — next session.** Full S&P 100 roster (current
    mid-2026 constituents). Final extract. Bronze freezes on this
    snapshot per demo-durability principle 1.
 
-## 8. References
+## 8. Glue Crawler attempt and pivot to manual DDL (session 3, 2026-05-25)
+
+The plan at session 3 kickoff was Crawler-first → SQL-via-Athena verification
+(Option A from the kickoff branch-point). Bootstrap succeeded; the Crawler
+run against Bronze failed; the architectural lesson drove a pivot to manual
+DDL with the Crawler infrastructure kept as scaffolding for future Silver
+and Gold layers.
+
+**Infrastructure shipped (kept post-pivot).**
+
+- IAM role `AWSGlueServiceRole-financial-analytics-lakehouse` — managed
+  `AWSGlueServiceRole` policy + custom inline policy `S3ReadAccess-financial-analytics-lakehouse`
+  scoping read access to our bucket only. ARN
+  `arn:aws:iam::470439680370:role/AWSGlueServiceRole-financial-analytics-lakehouse`.
+- Glue database `financial_analytics_bronze` — namespace container for
+  Bronze tables.
+- Glue Crawler `crawler_bronze_sec_edgar` — S3 source `zone=bronze/`,
+  on-demand schedule (per demo-durability principle 2), table prefix
+  `sec_edgar_`.
+
+**Crawler run result — FAILED at 49 seconds, 0.223 DPU-hours.** Error:
+`com.amazonaws.services.glue.model.ValidationException: Value at 'table.storageDescriptor.columns.3.member.type' failed to satisfy constraint: Member must have length less than or equal to 131072`.
+Failing table: `sec_edgar_cik_0001045810` (NVIDIA). 6 partial tables
+created before bail; partitions not unified.
+
+**Root cause.** Glue Catalog has a hard 131,072-character (128 KB) ceiling
+on each column's type-definition string. SEC EDGAR's `facts` field is a
+deeply nested struct — `facts.us-gaap.*` enumerates hundreds of XBRL
+concepts per company, and the concept set DIFFERS per company. When the
+Crawler tried to express NVIDIA's `facts` as a strongly-typed nested
+struct, the type string blew past 128 KB and the Catalog rejected the
+write.
+
+**Pivot decision.** No Crawler config can fit NVIDIA's full inferred
+schema — the limit is architectural, not configurable. Two cleanup steps:
+(a) dropped the 6 polluted Crawler-created tables via `DROP TABLE`
+statements through the new Athena workgroup; (b) authored manual
+`CREATE EXTERNAL TABLE` DDL with the heterogeneous `facts` field
+intentionally excluded (see section 9).
+
+**Crawler retention rationale.** The Crawler stays in place because future
+Silver and Gold layers will land Parquet files with dbt-controlled schemas
+— no heterogeneity, no 128 KB risk. Re-pointing this same Crawler at
+`zone=silver/` and `zone=gold/` in later phases will work cleanly. The
+IAM role + database + Crawler infrastructure is reusable scaffolding,
+not session-3 dead weight.
+
+Full lesson banked in LEARNINGS.md "Glue Crawler fails on heterogeneous
+JSON via the 128 KB column-type-definition limit (2026-05-25, Phase 1
+session 3)".
+
+## 9. Manual Bronze DDL design (session 3, 2026-05-25)
+
+**Goal.** Query Bronze partitions from Athena despite SEC EDGAR JSON's
+schema heterogeneity. The Bronze layer's job is to make raw landings
+queryable enough to VERIFY (partition presence, JSON parseability,
+expected entities present); deep structured access to `facts` is a Phase 2
+Silver concern where dbt-athena models handle it via `json_extract_*`
+functions on the raw files.
+
+**File:** `sql/ddl/01_create_bronze_tables.sql`. CREATE EXTERNAL TABLE
+`financial_analytics_bronze.sec_edgar_companyfacts`. Idempotent with a
+DROP IF EXISTS guard for re-runs.
+
+**Design calls (senior-DE defaults).**
+
+- **Single data column: `entityname` (string).** Universal across all
+  companies — every companyfacts.json has a top-level `entityName`. SerDe
+  mapping `'mapping.entityname' = 'entityName'` preserves the camelCase
+  reference to the JSON field through Hive's default lowercasing.
+- **`facts` column intentionally excluded.** The heterogeneous deep struct
+  is what broke the Crawler; excluding it from Bronze avoids the 128 KB
+  type-definition issue entirely. Phase 2 Silver dbt models will use
+  `json_extract_scalar(read_file('s3://.../companyfacts.json'), '$.facts.us-gaap.<concept>...')`
+  patterns to access the data when normalizing into hubs/links/satellites.
+- **openx JsonSerDe.** Athena's canonical JSON SerDe. Permissive struct
+  handling, supports case-mapping; `ignore.malformed.json = false`
+  surfaces bad files loudly rather than silently skipping.
+- **Partition projection.** TBLPROPERTIES `projection.enabled = true`
+  with two partition columns: `extract_date` (type=date, range
+  `2026-05-24,NOW`, format `yyyy-MM-dd`) + `cik` (type=injected). The
+  `storage.location.template` reconstructs S3 paths from partition values.
+  No `MSCK REPAIR` or `ALTER TABLE ADD PARTITION` needed when new
+  extract_date partitions land — Athena infers them at query time from
+  the date range.
+- **`injected` projection on cik.** Queries against this table MUST
+  include a WHERE filter on `cik` — Athena won't enumerate cik values
+  automatically (the cardinality is too high for static enumeration).
+  This is documented standard Athena behavior; the verification suite
+  filter handles this naturally.
+
+**Smoke check result (post-DDL run).** Query
+`SELECT extract_date, cik, entityname FROM financial_analytics_bronze.sec_edgar_companyfacts WHERE cik IN (...) ORDER BY cik`
+returned 11 rows: Apple (CIK 0000320193) at extract_date 2026-05-24,
+other 10 at 2026-05-25, all entity names correct. NVIDIA — the company
+whose facts struct broke the Crawler — reads cleanly through the manual
+DDL.
+
+10-criteria audit: 10/10 PASS.
+
+## 10. Athena workgroup and Bronze verification suite (session 3, 2026-05-25)
+
+**Workgroup `wg_financial_analytics`.** Dedicated workgroup for the
+project — isolates query costs, scanned bytes, and CloudWatch metrics
+from the default `primary` workgroup. ARN
+`arn:aws:athena:us-east-1:470439680370:workgroup/wg_financial_analytics`.
+
+Settings:
+
+- Query result location: `s3://phil-financial-analytics-lakehouse/athena-results/`
+  (Customer managed; separate prefix from data zones).
+- Override client-side settings: ON. Forces every query through workgroup
+  settings even when invoked via boto3/JDBC.
+- Engine: Athena engine version 3 (current generation).
+- Authentication: IAM.
+- Per-query bytes-scanned hard cap: DEFERRED. AWS UI surfaces only soft
+  CloudWatch alerts at workgroup level in the modern Console; the
+  historical hard cap moved to post-creation edit path. Acceptable at our
+  30-300 MB bucket scale (a pathological full-bucket scan still costs
+  pennies); Phase 6 polish if data crosses GB territory.
+
+**Bronze verification suite — `sql/verify/01_phase1_bronze_verification.sql`.**
+CTE-based PASS/FAIL pattern carried from Project #2 LEARNINGS. Single-query
+suite with 6 checks against `financial_analytics_bronze.sec_edgar_companyfacts`:
+
+| # | Check | Expected | Validates |
+|---|---|---|---|
+| 1 | total_row_count | 11 | All CIK partitions discoverable via projection |
+| 2 | distinct_cik_count | 11 | No partition duplicates |
+| 3 | extract_date_count | 2 | Multi-session partition split working |
+| 4 | today_row_count | 10 | Today's 10-company batch landed complete |
+| 5 | yesterday_row_count | 1 | Apple from session 2 still readable through new DDL |
+| 6 | non_null_entitynames | 11 | JSON parseability for every file (no malformed-JSON skip) |
+
+**Run result.** All 6 PASS on first run. 1.181 sec runtime, 241.5 KB
+scanned. 10-criteria audit: 10/10 PASS.
+
+**Out of scope (deferred).**
+
+- S3 object byte-count verification — lives in S3 object metadata
+  (`Content-Length` header on each object), not in the JSON content
+  Athena reads. Requires a boto3-based check via `list_objects_v2` +
+  `head_object`. Deferred to next session.
+- sha256 fingerprint uniqueness per CIK — same constraint; lives in the
+  S3 object metadata Phil's extract script stamps during put. Deferred
+  to the same next-session boto3 script.
+
+The deferred boto3 verification + the SQL verification suite together
+form the full Phase 1 Bronze verification surface. Both will be referenced
+at Phase 1 close-out (next session) before declaring Phase 1 ship-ready.
+
+## 11. References
 
 - SEC EDGAR API docs: `https://www.sec.gov/edgar/sec-api-documentation`
+- AWS Athena partition projection docs: `https://docs.aws.amazon.com/athena/latest/ug/partition-projection.html`
+- AWS Athena openx JsonSerDe docs: `https://docs.aws.amazon.com/athena/latest/ug/openx-json-serde.html`
+- AWS Glue Catalog limits (128 KB column type-definition): `https://docs.aws.amazon.com/general/latest/gr/glue.html`
 - PROJECT_PLAN.md section 2 — data source overview
 - PROJECT_PLAN.md section 4 decision #8 — User-Agent lock
 - PROJECT_PLAN.md section 11 — data budget (2M-row Bronze cap)
+- PROJECT_PLAN.md section 12 — engineering standards step-up checks
+- LEARNINGS.md "Project #3 lessons" — five session 3 entries banked
 - LEARNINGS.md "Carry-forward to Project #3" — step-up testing pattern
   + polite rate limiter principle
 - ENGINEERING_STANDARDS.md criterion 9 — pre-flight + post-action verification
 - ENGINEERING_STANDARDS.md criterion 10 — observable progress + actionable errors
-- ENGINEERING_STANDARDS.md "Phase-boundary structural audit" — Phase 1 session 2 audit
+- ENGINEERING_STANDARDS.md "Phase-boundary structural audit" — Phase 1 sessions 2 + 3 audits
 
 ---
 
-*Status: Phase 1 session 2 deliverables shipped 2026-05-24. To be expanded
-further when the 10-company and full 100-company runs ship in subsequent
-sessions, and when the Glue Crawler bootstrap + Bronze verification suite
-(`sql/verify/01_phase1_bronze_verification.sql`) land.*
+*Status: Phase 1 session 3 deliverables shipped 2026-05-25 — 10-company
+extract PASSED, Glue Crawler attempted-and-pivoted, Athena workgroup
+`wg_financial_analytics` configured, manual Bronze DDL + verification
+suite (6/6 PASS) on disk in `sql/ddl/` and `sql/verify/`. Phase 1 close-out
+in session 4: 100-company full S&P 100 extract + boto3 S3 metadata
+verification script + Phase 1 structural audit + Bronze freeze.*

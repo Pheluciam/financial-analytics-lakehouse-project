@@ -135,6 +135,55 @@ explanation has explicit homes: the training journey, mock interviews,
 and Phil saying "explain that more." Default elsewhere = tight bullets,
 move fast, ship.
 
+### venv-not-active on a fresh PowerShell session (2026-05-25, Phase 1 session 3)
+
+**Diagnosis.** Started session 3's 10-company extract with `python scripts/extract_sec_edgar.py --cik ...`. Hit `ModuleNotFoundError: No module named 'boto3'` at the import line. Phil correctly named the hypothesis in his own words ("I'm not in venv. Is that an issue?") before Claude proposed the fix — engagement with the diagnostic rather than blank-stare-and-accept.
+
+**Fix.** Activate the venv before running scripts: `.\.venv\Scripts\Activate.ps1`. Visual tell: prompt prefix changes to `(.venv) PS C:\...>`. boto3 was installed into the venv at session 2 close, not into system Python; the fresh PowerShell window had no venv active, so the unqualified `python` invocation resolved to system Python which has no boto3.
+
+**Lesson.** Every new PowerShell window starts WITHOUT venv active. Manual activation required every time. VS Code's integrated terminal can be auto-configured via workspace settings (Phase 6 polish); outside-VS-Code fresh shells always need the manual step. Carry-forward debugging-fluency win: Phil drove the diagnosis to fix, not the other way around. Worth banking as a live-coding interview reference — the first question after any "my script doesn't run" failure is "what Python is actually running this?", and the second is "is the venv active?".
+
+### Glue Crawler fails on heterogeneous JSON via the 128 KB column-type-definition limit (2026-05-25, Phase 1 session 3)
+
+**Diagnosis.** Glue Crawler against `s3://phil-financial-analytics-lakehouse/zone=bronze/` failed at 49 seconds (0.223 DPU-hours) with `com.amazonaws.services.glue.model.ValidationException: Value at 'table.storageDescriptor.columns.3.member.type' failed to satisfy constraint: Member must have length less than or equal to 131072`. Failing table: `sec_edgar_cik_0001045810` (NVIDIA). 6 partial tables created before bail; partitions not unified into a single table as we expected.
+
+**Root cause.** Glue Catalog has a hard 131,072-character (128 KB) ceiling on each column's type-definition string. SEC EDGAR's `facts` field is a deeply nested struct — `facts.us-gaap.*` enumerates hundreds of XBRL concepts per company, and the concept set DIFFERS per company (banks report different concepts than energy majors). When the Crawler tried to express NVIDIA's `facts` as a strongly-typed nested struct, the type string blew past 128 KB and the Catalog rejected the write.
+
+**Fix.** Pivot from Crawler to manual `CREATE EXTERNAL TABLE` DDL. The 128 KB cap is a Catalog architectural limit — no Crawler config can fit NVIDIA's full inferred schema. Manual DDL excludes the heterogeneous `facts` field entirely; types only universal columns (`entityname`) plus partition keys (`extract_date`, `cik`). Phase 2 Silver dbt-athena models will parse the JSON via `json_extract_*` on raw S3 files when building hubs/links/satellites.
+
+**Lesson.** Glue Crawler earns its keep when data shape is schema-PREDICTABLE (Parquet, CSV, narrow JSON). It breaks on deeply-heterogeneous JSON like SEC EDGAR XBRL facts. When the data shape is known at design time, manual DDL beats Crawler. The Crawler infrastructure stays as scaffolding for Silver/Gold Parquet layers where it'll work cleanly. Carry-forward: at design time, audit upstream JSON for heterogeneous keys before defaulting to Crawler. The "see what Glue does first" optimistic approach cost 49 seconds and 0.223 DPU-hours to confirm what a single web search on Glue limits would have predicted.
+
+### Athena Query Editor enforces one statement per Run (2026-05-25, Phase 1 session 3)
+
+**Diagnosis.** Pasted Bronze DDL containing both `DROP TABLE IF EXISTS ...` and `CREATE EXTERNAL TABLE ...` separated by a semicolon. Athena Console returned: "Only one sql statement is allowed."
+
+**Fix.** Split into two queries; Run each in turn via the Console editor. Web search (allowed_domains restricted to AWS docs) confirmed the constraint is documented — single-statement-per-Run is a Console editor design, not a SQL dialect limitation. CTEs and multi-CTE single statements are fine; semicolon-separated multiple statements are not. Production deployments via boto3, AWS CLI, or Step Functions can batch multi-statement DDL — only the Console UI enforces this.
+
+**Lesson.** Athena Console Query Editor has a single-statement-per-Run constraint that's tooling-layer, not SQL-dialect. When shipping multi-statement DDL files for portfolio polish: include a header comment "Run order in Athena Console: one statement at a time per the Console's single-statement-per-Run constraint. Production deployments via boto3 / Step Functions can submit both in one batch." That comment lives at the top of `sql/ddl/01_create_bronze_tables.sql` as the standing convention.
+
+### TYPE_MISMATCH on date BETWEEN over a string partition column + four valid fixes (2026-05-25, Phase 1 session 3)
+
+**Diagnosis.** Smoke-check query `WHERE extract_date BETWEEN DATE '2026-05-24' AND DATE '2026-05-25'` failed with `TYPE_MISMATCH: line 3:20: Cannot check if varchar is BETWEEN date and date`. Phil correctly diagnosed the type mismatch in his own words ("we've stored extract date as a varchar rather than as a date field" — speech-to-text rendered "bar chart" but the concept was correct) before Claude proposed the fix.
+
+**Root cause.** `extract_date` is declared as STRING in `PARTITIONED BY (...)`. Athena reads partition values from S3 path strings (`extract_date=2026-05-24`), so the column type in the table is varchar regardless of what the partition PROJECTION declares. The projection's `type='date'` controls how Athena enumerates partition values during pruning, not the column type the WHERE predicate sees.
+
+**Fix — four valid approaches, ranked for senior-DE practice.**
+
+1. **Option B (string comparison) — RECOMMENDED.** `WHERE extract_date BETWEEN '2026-05-24' AND '2026-05-25'`. ISO 8601 (YYYY-MM-DD) strings sort lexicographically the same as date order — no type conversion needed, no runtime cost, no risk of defeating partition pruning. Cleanest when the partition column is string-typed.
+2. **Option A (drop the date filter).** Valid only when partition count is small enough that scanning all is cheap. Trivial at our 2-partition scale.
+3. **Option C (explicit CAST).** `WHERE CAST(extract_date AS DATE) BETWEEN DATE '...' AND DATE '...'`. Most portable across dialects. Gotcha: casting a partition column can defeat partition pruning at TB scale if the optimizer doesn't push the predicate down.
+4. **Option D (Trino DATE function).** `WHERE DATE(extract_date) BETWEEN DATE '...' AND DATE '...'`. Same effect as Option C, less verbose, less portable across dialects.
+
+**Lesson.** Partition projection's TYPE setting and the partition COLUMN's declared type are SEPARATE concerns. When designing partition schemes: choose the column type that matches how queries will FILTER, not just how the projection ENUMERATES. Verified mid-session via web search: the `::` PostgreSQL cast operator is NOT supported in Athena/Trino — use `CAST(... AS type)` instead. The `::` shortcut is PostgreSQL-specific. Phil drove this diagnosis correctly — banked as another debugging-fluency win.
+
+### Web-search-verify before shipping unverified syntax claims (2026-05-25, Phase 1 session 3)
+
+**Diagnosis.** Claude claimed mid-session: "openx JsonSerDe serializes complex nested objects back to STRING when the column type is STRING" — without docs verification. The Bronze DDL was designed with `facts string` relying on this behavior. Phil pushed back ("do not trust your training model. Do a web search on AWS Athena docs") BEFORE the DDL shipped to Athena.
+
+**Fix.** Two targeted web searches (with `allowed_domains` restricted to docs.aws.amazon.com + trino.io) — (1) confirmed Athena Console one-statement-at-a-time constraint, (2) confirmed `::` cast NOT supported in Athena/Trino. Critically, the openx-string-serialization claim was NOT confirmed by the docs. Pivoted to a safer DDL: drop the `facts` column entirely from Bronze, type only `entityname`. Phase 2 Silver dbt-athena models will use `json_extract_*` on raw S3 files for any JSON parsing — pushes the heterogeneity handling to where it belongs architecturally.
+
+**Lesson.** Training-data claims about syntax + library behavior can be confidently wrong, especially for AWS services that evolve quickly. For DDL or schema design decisions worth a verifying search even when 80% confident. Use `allowed_domains` to restrict searches to authoritative sources (AWS docs, dialect-owner docs like trino.io) — never random blogs. Phil's "do not trust your training, web-search authoritative sources" discipline is now a standing pattern for the rest of Project #3 and all mini-projects: before shipping any non-trivial DDL, API call, or library claim, two checks — (1) does this work? (2) is my syntax current? Bank as an interview talking point: "How do you handle uncertainty about AWS service behavior?" — answer: "Restricted-domain web search of authoritative docs, then verify in a sandbox before shipping."
+
 ### Banked open items from session 1 (not lessons, but trackable)
 
 - **Free Plan cliff: 23 Nov 2026.** AWS account converts to paid OR
