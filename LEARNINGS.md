@@ -184,6 +184,30 @@ move fast, ship.
 
 **Lesson.** Training-data claims about syntax + library behavior can be confidently wrong, especially for AWS services that evolve quickly. For DDL or schema design decisions worth a verifying search even when 80% confident. Use `allowed_domains` to restrict searches to authoritative sources (AWS docs, dialect-owner docs like trino.io) — never random blogs. Phil's "do not trust your training, web-search authoritative sources" discipline is now a standing pattern for the rest of Project #3 and all mini-projects: before shipping any non-trivial DDL, API call, or library claim, two checks — (1) does this work? (2) is my syntax current? Bank as an interview talking point: "How do you handle uncertainty about AWS service behavior?" — answer: "Restricted-domain web search of authoritative docs, then verify in a sandbox before shipping."
 
+### Web fetch returning empty on a server-rendered page → escalate to alternate authoritative source (2026-05-25, Phase 1 session 4)
+
+**Diagnosis.** Tried to fetch the Wikipedia S&P 100 constituent table via web_fetch for the 100-company roster derivation. Page returned empty body (likely JS-rendered table or sandbox-level bot detection — the page itself exists, the search results found it, but the fetch returned only the URL string with no content). The S&P Dow Jones Indices interactive page also fetched (76 KB) but contained no constituent table inline — that's a client-rendered React app.
+
+**Fix.** Pivoted to the iShares OEF S&P 100 ETF NPORT-P schedule of investments on SEC EDGAR (search results had surfaced it). The OEF tracks the S&P 100 by construction — its holdings ARE the index. SEC EDGAR HTML filings are server-rendered, persistent URLs, no JS dependency. Returned 101 ticker line items cleanly. Cross-referenced against SEC's company_tickers.json (~75 KB JSON of 10K+ entries) via single regex grep to extract the 100 CIKs.
+
+**Lesson.** When researching a topic where multiple authoritative sources exist, the "obvious" Wikipedia route isn't always cheapest. Index-tracking ETFs filed with regulators are often the more durable authoritative source — quarterly NPORT-P filings, persistent SEC URLs, server-rendered HTML, no JS dependency. The general principle: regulated filings beat web pages when both exist. Banked as a research-pattern for the rest of Project #3 and any future portfolio work needing authoritative index/benchmark constituent lists.
+
+### Defensive non-conforming-key skip earned its keep on first run (2026-05-25, Phase 1 session 4)
+
+**Diagnosis.** scripts/verify_bronze_s3_metadata.py was built with a PARTITION_KEY_RE regex check + WARNING skip for keys not matching the expected `zone=bronze/extract_date=YYYY-MM-DD/cik=XXXXXXXXXX/` shape. On its very first run, the skip fired once — on the bare `zone=bronze/` folder placeholder created during session 1's S3 bucket setup. Without the skip, that key would have crashed downstream parsing (no extract_date or cik to extract from `zone=bronze/`).
+
+**Fix.** No fix needed — the defense worked exactly as designed. Logged the skipped key with WARNING level, surfaced the skip count in the summary line ("Listed 101 Bronze objects (1 skipped non-conforming)"), continued without raising.
+
+**Lesson.** Defensive checks against "this shouldn't happen, but if it does, log loudly and continue" are worth the line count even when they feel like over-engineering at design time. The cheapest place to catch unexpected state is the first run, not after weeks of accumulated drift. Carry-forward: every S3 enumeration script in Project #3 (Silver / Gold verify scripts in Phase 2-4) should validate the key shape it expects to see, log skips by name, and surface the skip count in the summary. Reads as "defensive engineering" in code review; functions as "free interview talking point" — explaining the line in interview reads as senior-DE thinking.
+
+### Athena scan on raw JSON Bronze scales with CIK count, not query selectivity (2026-05-25, Phase 1 session 4)
+
+**Diagnosis.** Re-running the refactored SQL verify suite at 100-CIK scale: 2.03 GB scanned for a query that SELECTs only one column (entityname) plus the two partition columns (extract_date, cik). At 11-CIK scale the same SELECT scanned 241.5 KB. That's ~8400x scan increase for 10x CIK count — vastly more than the linear 10x naive intuition would predict.
+
+**Root cause.** Athena's openx JsonSerDe reads every byte of every JSON file in the matched partitions, regardless of how few columns the query projects. Each Bronze partition holds a 2-7 MB raw companyfacts JSON file. The SerDe parses the full JSON to materialize the queried row — no column pruning, no predicate pushdown, no projection pushdown. Athena's columnar scan optimizations work for Parquet / ORC / Iceberg; they do not work for row-oriented JSON. Cost at this scale: ~$0.01 per query (well within demo budget). At Silver/Gold scale with daily refresh, that same pattern would be $1-5/query.
+
+**Lesson.** Bronze JSON layers are query-cost-inefficient by design — that's exactly why the medallion pattern materializes Silver as a columnar format. Bank as the explicit cost rationale for Phase 2 dbt-athena Iceberg/Parquet materialization: Bronze JSON scanned 2 GB for a single-column SELECT at 100 CIKs because openx JsonSerDe has no column pruning; Silver as Parquet/Iceberg brings typical scan to KB territory via Athena's columnar engine. Interview talking point ready to ship: "Why did you pick Parquet for Silver?" → "Measured: Bronze JSON scans 2 GB for a 1-column query; Parquet column pruning brings that to KB. The materialization layer pays for itself in pennies per query at Phase 1 scale and dollars per query at production scale."
+
 ### Banked open items from session 1 (not lessons, but trackable)
 
 - **Free Plan cliff: 23 Nov 2026.** AWS account converts to paid OR

@@ -15,12 +15,12 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 1 — Bronze landing** (mid-phase, session 3 closed) |
-| Next phase | Phase 1 session 4 — 100-company full S&P 100 extract (Bronze freeze) + boto3 S3 metadata verification script + Phase 1 close-out audit |
-| Last session closed | 2026-05-25 (Phase 1 session 3) |
-| Last bundled commit | 2026-05-25 — Phase 1 session 3 bundle (10-company extract + Glue Crawler attempt + manual Bronze DDL + Athena workgroup + verification suite — all 6 checks PASS) |
+| Active phase | **Phase 1 CLOSED 2026-05-25 — Bronze frozen.** Phase 2 (Silver DV2.0 via dbt-athena) pending kickoff. |
+| Next phase | Phase 2 session 1 — dbt-athena scaffolding kickoff. ~90-150 min. Scope: pip install dbt-athena-community, IAM permission expansion (dbt write to Glue Catalog + Athena workgroup + S3 silver/gold zones), Iceberg vs Parquet materialization decision, dbt project init (dbt_project.yml, profiles.yml.example, packages.yml, sources.yml), first staging model (stg_sec_edgar__companyfacts exercising json_extract_* on Bronze), dbt run + verify Silver Parquet lands in S3, DBT_PIPELINE.md stub, 10-criteria audit. |
+| Last session closed | 2026-05-25 (Phase 1 session 4 — CLOSE) |
+| Last bundled commit | 2026-05-25 — Phase 1 session 4 bundle (full S&P 100 extract PASSED, scripts/verify_bronze_s3_metadata.py shipped 5/5 PASS, SQL verify refactored 11→100 scale 6/6 PASS, Phase 1 close-out structural audit clean, EXTRACT_PIPELINE section 11 added) |
 | Active blockers | None |
-| Open questions | None blocking session 4 kickoff |
+| Open questions | dbt-athena Iceberg vs Parquet materialization (to be locked at Phase 2 session 1 kickoff per PROJECT_PLAN.md section 14) |
 
 ---
 
@@ -88,6 +88,110 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-05-25 — Phase 1 session 4 — 100-company extract + boto3 S3 metadata verify + Phase 1 CLOSE-OUT (Bronze frozen)
+
+**Goal.** Phase 1 close-out + Bronze freeze per demo-durability principle 1.
+Full S&P 100 extract (final Bronze landing), boto3-based S3 metadata
+verification script (covers what SQL can't), SQL verify suite refactor
+11 → 100 scale, Phase 1 structural audit. After today: Bronze is the
+system-of-record snapshot that everything else hangs off; SEC EDGAR API
+is not in the live demo path.
+
+**What landed.**
+
+- **S&P 100 roster derivation.** Authoritative source — iShares OEF S&P 100
+  ETF NPORT-P schedule of investments as of 2025-12-31 (filed 2026-02-25).
+  101 ticker line items confirmed; 100 distinct CIKs (Alphabet's GOOGL +
+  GOOG share a single SEC filer CIK 1652044). Tickers mapped to 10-digit
+  CIKs via SEC's company_tickers.json master file. All 100 found cleanly
+  on first regex pass. Wikipedia S&P 100 page returned blank via web_fetch
+  (sandbox/JS-render issue); SEC NPORT-P route was the cleaner authoritative
+  path in hindsight.
+- **100-company SEC EDGAR extract PASSED.** 5 min 25 sec wall-clock for
+  100 CIKs (vs 12 min estimate — SEC fetches are the dominant cost, not
+  the 0.12s rate-limit sleep). Rate limiter validated at full scale — no
+  429s, no SEC rejections, no retry exhaustion. Final summary `All 100
+  CIK(s) landed`. Bronze post-extract: 100 distinct CIKs × 2 extract_date
+  partitions = 101 objects (Apple in both; 99 others only at 2026-05-25).
+  The 10 session-3 CIKs re-extracted into the same 2026-05-25 partition
+  (overwrote own files cleanly per S3 versioning).
+- **`scripts/verify_bronze_s3_metadata.py` SHIPPED.** Three-layer pattern
+  (verbose chat → clean disk → EXTRACT_PIPELINE.md section 11). Paginated
+  `list_objects_v2` + sequential `head_object` loop + 5 PASS/FAIL checks:
+  object count = 101, distinct CIKs = 100, partition count = 2, min size
+  > 0, sha256_cross_cik_collisions = 0. First run 5/5 PASS in 27 sec.
+  Non-conforming-key skip caught the bare `zone=bronze/` folder placeholder
+  from session 1's bucket setup — defensive design earned its keep on
+  first run. 10-criteria audit: 10/10 PASS.
+- **`sql/verify/01_phase1_bronze_verification.sql` REFACTORED for 100-scale.**
+  Four targeted edits — header comment scope (Bronze freeze context),
+  out-of-scope section (boto3 script no longer deferred), IN list 11 →
+  100 CIKs (10 per line for readability), expected values updates
+  (11 → 101, 11 → 100, 10 → 100, 11 → 101; checks 3 and 5 unchanged).
+  Re-run via Athena workgroup `wg_financial_analytics`: 6/6 PASS,
+  1.994 sec runtime, 2.03 GB scanned (~$0.01 Athena cost).
+- **Phase 1 close-out structural audit clean.** File inventory complete
+  (all PROJECT_PLAN.md section 9 Phase 1 deliverables shipped), naming
+  monotonicity intact, no stale .gitkeep, verify-pairs intact, doc
+  currency confirmed at session close.
+- **`EXTRACT_PIPELINE.md`** — section 11 (boto3 metadata verification
+  walkthrough) shipped; existing References renamed to section 12;
+  Status line updated to "Phase 1 COMPLETE — Bronze frozen 2026-05-25";
+  section 10 closing paragraph updated to drop the "deferred" framing.
+- **`README.md`** — Status line bumped from "Phase 1 session 1 complete"
+  to "Phase 1 complete (Bronze frozen)" with the 11-check verification
+  surface summarized.
+- **`LEARNINGS.md`** — three new "Project #3 lessons" entries banked
+  (1) web fetch blank-page escalation pattern → SEC NPORT-P route,
+  (2) defensive non-conforming-key skip earns its keep on first run,
+  (3) Athena scan on raw JSON Bronze scales with CIK count not query
+  selectivity (rationale for Phase 2 Parquet materialization).
+
+**Verification surface at Bronze freeze (the canonical Phase 1 ship gate).**
+
+- 5/5 boto3 metadata PASS
+- 6/6 Athena SQL PASS
+- 11 independent checks, all PASS
+- Bronze inventory: 101 objects, 100 distinct CIKs, 2 extract_date partitions
+
+**Decisions locked this session.** None new at the project-stack level —
+Phase 1 close, no architecture pivots. Data-side calibration: authoritative
+S&P 100 source = iShares OEF NPORT-P (cleaner than Wikipedia or S&P Dow
+Jones interactive pages when both fail under direct fetch).
+
+**Blockers / surprises.** Two minor process surprises, no architectural
+surprises:
+
+- Wikipedia S&P 100 page returned blank via web_fetch (likely JS-rendered
+  table or sandbox-level bot detection). Pivoted to iShares OEF NPORT-P
+  SEC filing as the authoritative roster source — actually cleaner in
+  hindsight (the OEF holdings ARE the S&P 100 by construction).
+- Athena scan jumped 8400x (241 KB → 2.03 GB) for 10x CIK count increase.
+  JSON content read per partition is the cost driver — openx JsonSerDe
+  reads every byte regardless of column projection. Silver Parquet in
+  Phase 2 will collapse this. Banked as the explicit cost rationale for
+  Phase 2 materialization.
+
+**NOT in this session — deferred.**
+
+- dbt-athena Iceberg vs Parquet materialization decision → Phase 2 session 1.
+- IAM permission expansion for dbt write paths → Phase 2 session 1.
+- VS Code venv auto-activate config → Phase 6 polish.
+- Bronze stamped-sha256 vs recomputed-sha256 deep integrity check (`--deep`
+  flag on verify_bronze_s3_metadata.py) → Phase 6 polish.
+
+**Next session.** Phase 2 session 1 — dbt-athena scaffolding kickoff.
+Estimated 90-150 min. Scope: pip install dbt-athena-community, IAM
+permission expansion (dbt write to Glue Catalog + Athena workgroup + S3
+silver/gold zones), Iceberg vs Parquet decision (locked once at start),
+dbt project init (dbt_project.yml, profiles.yml.example, packages.yml,
+sources.yml pointing at sec_edgar_companyfacts), first staging model
+(stg_sec_edgar__companyfacts exercising `json_extract_*` on Bronze JSON),
+dbt run + verify Silver Parquet lands in S3, DBT_PIPELINE.md stub,
+10-criteria audit, session close.
+
+---
 
 ### 2026-05-25 — Phase 1 session 3 — 10-company extract + Glue Crawler attempt + manual Bronze DDL + verification suite
 
@@ -349,26 +453,27 @@ full-100 scale-up.
 
 ---
 
-## Files in the project (Phase 1 session 3 close inventory)
+## Files in the project (Phase 1 close inventory — Bronze frozen 2026-05-25)
 
 Doc-shaped:
 
-- `README.md` — TBD at Phase 6
+- `README.md` ✓ (stub; polish at Phase 6 — Status line current as of Phase 1 close)
 - `PROJECT_PLAN.md` ✓
 - `PROJECT_CONTEXT.md` ✓ (this file)
 - `LEARNING_ROADMAP.md` ✓
 - `TEACHING_PREFERENCES.md` ✓
 - `ENGINEERING_STANDARDS.md` ✓
 - `GLOSSARY.md` ✓
-- `LEARNINGS.md` ✓ (5 new Project #3 entries banked session 3)
-- `EXTRACT_PIPELINE.md` ✓ (Phase 1 walkthrough; sections 1-8 shipped sessions 1-2, sections 9-11 shipped session 3)
+- `LEARNINGS.md` ✓ (13 Project #3 entries — 10 sessions 1-3 + 3 session 4)
+- `EXTRACT_PIPELINE.md` ✓ (Phase 1 walkthrough; sections 1-8 shipped sessions 1-2, sections 9-10 shipped session 3, section 11 + renumbered References 12 shipped session 4)
 
 Code-shaped:
 
 - `scripts/smoke_test_aws.py` ✓ (session 2 — AWS auth + S3 round-trip proof)
-- `scripts/extract_sec_edgar.py` ✓ (session 2 — SEC EDGAR companyfacts → S3 Bronze; 10-company test PASSED session 3)
+- `scripts/extract_sec_edgar.py` ✓ (session 2 — SEC EDGAR companyfacts → S3 Bronze; 1 → 10 → 100 company step-up all PASSED sessions 2-4)
+- `scripts/verify_bronze_s3_metadata.py` ✓ (session 4 — boto3 paginated list + head_object verify; 5/5 PASS at full S&P 100 scale)
 - `sql/ddl/01_create_bronze_tables.sql` ✓ (session 3 — manual Bronze table DDL with partition projection)
-- `sql/verify/01_phase1_bronze_verification.sql` ✓ (session 3 — CTE-based PASS/FAIL verification suite, all 6 PASS)
+- `sql/verify/01_phase1_bronze_verification.sql` ✓ (session 3, refactored session 4 for 100-CIK scale — 6/6 PASS)
 - `requirements.txt` ✓ (session 2 — boto3, python-dotenv, requests)
 
 AWS infrastructure (provisioned via Console, not yet captured as IaC):
@@ -398,5 +503,5 @@ Repo-config:
 
 ---
 
-*Last updated: 2026-05-25 (Phase 1 session 3 close). Append a session-log
-entry at every session close.*
+*Last updated: 2026-05-25 (Phase 1 session 4 close — Bronze frozen, Phase 1
+COMPLETE). Append a session-log entry at every session close.*

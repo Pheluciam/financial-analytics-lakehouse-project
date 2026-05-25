@@ -396,32 +396,124 @@ scanned. 10-criteria audit: 10/10 PASS.
   S3 object metadata Phil's extract script stamps during put. Deferred
   to the same next-session boto3 script.
 
-The deferred boto3 verification + the SQL verification suite together
-form the full Phase 1 Bronze verification surface. Both will be referenced
-at Phase 1 close-out (next session) before declaring Phase 1 ship-ready.
+The boto3 metadata verification (section 11) + the SQL verification suite
+together form the full Phase 1 Bronze verification surface. Both shipped
+2026-05-25 and pass cleanly at full S&P 100 scale (11 independent checks,
+all PASS).
 
-## 11. References
+## 11. boto3 S3 metadata verification script (session 4, 2026-05-25)
+
+The verification surface for Phase 1 has two layers. The SQL suite
+(section 10) covers JSON content as it appears in the Athena table.
+The boto3 script covers what only S3 object metadata can answer: per-object
+byte counts and sha256 fingerprint uniqueness across CIKs. Together they
+form 11 independent PASS/FAIL checks against the Bronze landing.
+
+**File:** `scripts/verify_bronze_s3_metadata.py`. Read-only — safe to re-run
+unbounded times. Three-layer pattern (verbose chat → clean disk → this
+walkthrough section).
+
+**What it proves, in order:**
+
+1. **AWS auth + bucket reachable** — mirrors the `smoke_test_aws.py` /
+   `extract_sec_edgar.py` pre-flight pattern. Same exit codes (auth=2,
+   bucket=3, network=4) so future Step Functions can branch identically.
+2. **List every Bronze object via paginated `list_objects_v2`.** Pagination
+   future-proofs the script for Silver/Gold layers that will easily exceed
+   the 1000-keys-per-response cap. Each object's `Size` and Hive-style
+   partition key components (`extract_date`, `cik`) are captured for
+   downstream checks.
+3. **Non-conforming key regex check + WARNING skip.** Keys not matching
+   `zone=bronze/extract_date=YYYY-MM-DD/cik=XXXXXXXXXX/` are logged and
+   skipped — surfaces drift if a stray file ever lands outside the
+   expected partition shape. On first run, correctly caught the bare
+   `zone=bronze/` folder placeholder from session 1's bucket setup.
+4. **`head_object` per object — fetch sha256 user metadata** stamped by
+   `extract_sec_edgar.py` during put. Sequential loop (~100ms per call ×
+   101 objects = ~15 sec); threading deferred as premature optimization.
+5. **Run 5 PASS/FAIL checks + render report.**
+
+**The five checks:**
+
+| # | Check | Validates |
+|---|---|---|
+| 1 | object_count_total = 101 | 100 today + Apple at 2026-05-24 partition |
+| 2 | distinct_cik_count = 100 | Roster completeness (Alphabet collapses GOOGL+GOOG to one CIK) |
+| 3 | extract_date_partition_count = 2 | Multi-session partition split intact |
+| 4 | min_object_size > 0 | No zero-byte landings (corruption check) |
+| 5 | sha256_cross_cik_collisions = 0 | No two CIKs share an identical fingerprint |
+
+Check 5 is the SQL-impossible one. If a sha256 ever appeared under two
+different CIKs, two companies received the same byte stream — a real
+data-integrity failure that Athena reading JSON content could not detect.
+
+**Design calls locked at build time (senior-DE defaults):**
+
+- **Paginator over single `list_objects_v2` call** — even at 101 objects
+  pagination costs nothing extra, but it'll just work when Silver / Gold
+  cross the 1000-object threshold. Future-proof at zero present cost.
+- **head_object metadata-only, not GetObject body** — 101 small HTTP
+  requests vs 101 × 2-7 MB body GETs. ~10x faster, no network egress cost
+  meaningful at this scale either way.
+- **Sequential head_object loop** — threading would shave ~10 sec at
+  Phase 1 scale; complexity-vs-payoff not worth it.
+- **Cross-CIK sha256 collision check via defaultdict accumulation** —
+  groups CIKs by sha256, flags any group with more than one distinct CIK.
+- **PASS/FAIL table render mirrors the SQL suite shape** — `check_name |
+  expected | actual | status`. Reads side-by-side with the Athena query
+  results cleanly.
+- **7 exit codes** — auth (2), bucket (3), network (4), S3 operation (5),
+  verification failure (6), unexpected (1), OK (0). Same defensive pattern
+  as the extract script.
+
+**Run:**
+
+```powershell
+python scripts/verify_bronze_s3_metadata.py
+```
+
+```powershell
+python scripts/verify_bronze_s3_metadata.py --verbose
+```
+
+`--verbose` prints every object's key, size, and sha256 prefix — useful
+for spot-checks against the extract script's log output. Default mode
+prints only the per-step INFO lines + the final 5-row PASS/FAIL table.
+
+**Run result (2026-05-25, 15:45).** 5/5 PASS in 27 seconds. 101 Bronze
+objects listed, 1 non-conforming key (`zone=bronze/` folder placeholder)
+correctly skipped with WARNING. Smallest object 535,749 bytes (BLK).
+No zero-byte landings, no cross-CIK sha256 collisions.
+
+10-criteria audit: 10/10 PASS.
+
+## 12. References
 
 - SEC EDGAR API docs: `https://www.sec.gov/edgar/sec-api-documentation`
 - AWS Athena partition projection docs: `https://docs.aws.amazon.com/athena/latest/ug/partition-projection.html`
 - AWS Athena openx JsonSerDe docs: `https://docs.aws.amazon.com/athena/latest/ug/openx-json-serde.html`
 - AWS Glue Catalog limits (128 KB column type-definition): `https://docs.aws.amazon.com/general/latest/gr/glue.html`
+- boto3 S3 `list_objects_v2` paginator: `https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3/paginator/ListObjectsV2.html`
+- boto3 S3 `head_object`: `https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3/client/head_object.html`
+- iShares OEF S&P 100 ETF holdings (authoritative roster source for S&P 100 CIK derivation): `https://www.sec.gov/Archives/edgar/data/0001100663/000094040026007517/251704BR123125.htm`
+- SEC ticker→CIK master file: `https://www.sec.gov/files/company_tickers.json`
 - PROJECT_PLAN.md section 2 — data source overview
 - PROJECT_PLAN.md section 4 decision #8 — User-Agent lock
 - PROJECT_PLAN.md section 11 — data budget (2M-row Bronze cap)
 - PROJECT_PLAN.md section 12 — engineering standards step-up checks
-- LEARNINGS.md "Project #3 lessons" — five session 3 entries banked
-- LEARNINGS.md "Carry-forward to Project #3" — step-up testing pattern
-  + polite rate limiter principle
+- LEARNINGS.md "Project #3 lessons" — Project #3 entries banked sessions 1-4
+- LEARNINGS.md "Carry-forward to Project #3" — step-up testing pattern + polite rate limiter principle
 - ENGINEERING_STANDARDS.md criterion 9 — pre-flight + post-action verification
 - ENGINEERING_STANDARDS.md criterion 10 — observable progress + actionable errors
-- ENGINEERING_STANDARDS.md "Phase-boundary structural audit" — Phase 1 sessions 2 + 3 audits
+- ENGINEERING_STANDARDS.md "Phase-boundary structural audit" — Phase 1 sessions 2 + 3 + 4 audits
 
 ---
 
-*Status: Phase 1 session 3 deliverables shipped 2026-05-25 — 10-company
-extract PASSED, Glue Crawler attempted-and-pivoted, Athena workgroup
-`wg_financial_analytics` configured, manual Bronze DDL + verification
-suite (6/6 PASS) on disk in `sql/ddl/` and `sql/verify/`. Phase 1 close-out
-in session 4: 100-company full S&P 100 extract + boto3 S3 metadata
-verification script + Phase 1 structural audit + Bronze freeze.*
+*Status: Phase 1 COMPLETE — Bronze frozen 2026-05-25. Session 4 deliverables:
+full S&P 100 roster derivation (101 tickers from iShares OEF NPORT-P; 100
+distinct CIKs via SEC company_tickers.json), 100-company extract PASSED
+(5 min 25 sec wall-clock), `scripts/verify_bronze_s3_metadata.py` shipped
+(5/5 PASS), `sql/verify/01_phase1_bronze_verification.sql` refactored to
+100-scale (6/6 PASS at 2.03 GB scanned, ~$0.01), Phase 1 close-out
+structural audit clean. Phase 2 (Silver — Data Vault 2.0 via dbt-athena)
+kicks off next session.*

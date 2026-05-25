@@ -4,9 +4,11 @@
 > medallion (S3 + Glue + Athena) → 5-page Power BI executive overview.
 > Project #3 of Phil's data engineering portfolio.
 
-**Status:** Phase 1 session 1 complete (2026-05-23) — AWS foundation laid,
-S3 bucket + medallion zones provisioned, GitHub repo initialised. SEC EDGAR
-extract pipeline is session 2 work.
+**Status:** Phase 1 complete (2026-05-25) — Bronze frozen. Full S&P 100
+SEC EDGAR companyfacts landing on S3 (101 objects, 100 distinct CIKs across
+2 extract_date partitions), verified by an 11-check surface (5 boto3 S3
+metadata + 6 Athena SQL). Phase 2 (Silver Data Vault 2.0 via dbt-athena)
+next.
 
 ---
 
