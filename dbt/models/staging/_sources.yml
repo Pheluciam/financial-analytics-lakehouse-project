@@ -21,14 +21,13 @@ sources:
     tables:
       - name: sec_edgar_companyfacts
         description: |
-          One row per (extract_date, cik) partition. Hive-style partition
-          keys. Heterogeneous JSON structure under facts.us-gaap and
-          facts.dei across companies — parsed by staging models via
-          json_extract_* against the raw JSON files. The full facts
-          object is intentionally NOT declared as a Bronze column (the
-          Glue Crawler 128KB column-type-definition limit broke against
-          NVIDIA's filing; manual DDL excludes facts and pushes parsing
-          to Silver).
+          Phase 1 Bronze surface — typed cover-page columns from the
+          SEC EDGAR companyfacts JSON. One row per (extract_date, cik)
+          partition. Hive-style partition keys. The heterogeneous facts
+          object is intentionally NOT declared as a column here (the Glue
+          Crawler 128KB column-type-definition limit broke against
+          NVIDIA's filing in Phase 1 session 3). Use sec_edgar_companyfacts_raw
+          below to reach inside the facts object via json_extract_*.
         columns:
           - name: entityname
             description: |
@@ -40,6 +39,38 @@ sources:
               Partition key — date the extract ran (YYYY-MM-DD string).
               String type because partition projection is configured as
               type=date with explicit format yyyy-MM-dd.
+          - name: cik
+            description: |
+              Partition key — 10-digit zero-padded SEC Central Index Key.
+              Injected partition projection — every WHERE clause must
+              filter on cik or partition pruning fails.
+
+      - name: sec_edgar_companyfacts_raw
+        description: |
+          Phase 2 session 2 second Bronze surface over the same S3 files
+          as sec_edgar_companyfacts, but with a text-based SerDe (LazySimpleSerDe
+          with SOH field terminator) instead of openx JSON SerDe. Each
+          minified single-line JSON file lands as one row with its full
+          content in json_text. Downstream intermediate models call
+          json_extract_* against json_text to pull specific XBRL concepts
+          out of the heterogeneous facts.us-gaap nested structure.
+          See sql/ddl/02_create_bronze_raw_text_table.sql for the full
+          DDL + architectural decision record, and DBT_PIPELINE.md
+          section 7 for the walkthrough.
+        columns:
+          - name: json_text
+            description: |
+              Full JSON file body as a single text blob. Per-file content
+              from s3://phil-financial-analytics-lakehouse/zone=bronze/
+              extract_date=*/cik=*/companyfacts.json. Operate on this
+              column with json_extract_scalar (for scalars) and
+              json_extract (for nested objects / arrays).
+          - name: extract_date
+            description: |
+              Partition key — date the extract ran (YYYY-MM-DD string).
+              Same projection scheme as sec_edgar_companyfacts, so the
+              two Bronze tables share the same partition surface and
+              join cleanly on (cik, extract_date).
           - name: cik
             description: |
               Partition key — 10-digit zero-padded SEC Central Index Key.

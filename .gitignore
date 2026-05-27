@@ -47,7 +47,12 @@ scratch/
 
 # dbt — local-only runtime artefacts. profiles.yml carries env_var() refs
 # but is excluded out of an abundance of caution; .example committed instead.
+# .user.yml is dbt-generated per-developer-local identity (random UUID) on
+# first dbt invocation and must not be committed (would clobber another
+# developer's UUID on pull). Added Phase 2 session 2 after the file was
+# accidentally committed in Phase 2 session 1.
 dbt/profiles.yml
+dbt/.user.yml
 dbt/target/
 dbt/dbt_packages/
 dbt/logs/

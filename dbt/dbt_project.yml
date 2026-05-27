@@ -57,7 +57,7 @@ clean-targets:
 # staging — view: cheap, no S3 writes, parses Bronze JSON on every read.
 #   ACTIVE: Phase 2 session 1 onwards.
 # intermediate — view: cleaning + XBRL canonical-concept reconciliation.
-#   TO ADD: Phase 2 session 2 when first intermediate model lands.
+#   ACTIVE: Phase 2 session 2 onwards.
 # warehouse — iceberg table: Data Vault 2.0 hubs/links/satellites need ACID
 #   merge for SCD-2 satellite history (only available with Iceberg).
 #   TO ADD: Phase 2 session 3+ when first hub/link/satellite lands.
@@ -69,4 +69,6 @@ clean-targets:
 models:
   financial_analytics:
     staging:
+      +materialized: view
+    intermediate:
       +materialized: view

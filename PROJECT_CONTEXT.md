@@ -15,12 +15,12 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 2 in progress.** Session 1 CLOSED 2026-05-25 — dbt-athena scaffolding shipped, first staging model live, end-to-end pipeline proven (Bronze → staging view → Glue Catalog → Athena query). |
-| Next phase | Phase 2 session 2 — first intermediate model. ~60-120 min. Scope: solve the raw-JSON-read pattern for `facts` (json_extract_* against Bronze JSON files), build first intermediate model performing XBRL canonical-concept reconciliation (Revenues / SalesRevenueNet / Revenue → canonical), update dbt_project.yml to re-add intermediate layer config, second LEARNINGS bank pass, session close. |
-| Last session closed | 2026-05-25 (Phase 2 session 1 — CLOSE) |
-| Last bundled commit | 2026-05-25 — Phase 2 session 1 bundle (dbt-athena adapter + phil-dbt IAM user with Customer Managed Policy + dbt project scaffold + first staging model PASSING + DBT_PIPELINE.md stub + 4 new LEARNINGS entries + TEACHING_PREFERENCES third re-lock on paste-able discipline) |
+| Active phase | **Phase 2 in progress.** Session 2 CLOSED 2026-05-27 — first intermediate model live, raw-JSON-read pattern locked as Option B (second Bronze table over same S3 location), verification suite 6/6 PASS against Apple's public 10-K filings. |
+| Next phase | Phase 2 session 3 — canonical-concept reconciliation intermediate model. Maps alias concept names (Revenues / SalesRevenueNet / RevenueFromContractWithCustomerExcludingAssessedTax → canonical "revenue") so downstream consumers don't need to know about the XBRL alias zoo. Add `period_start_date` to the intermediate schema for unambiguous annual-vs-quarterly disambiguation. Then onward to first warehouse-layer Data Vault 2.0 model (hub_company). Est. 60-90 min. |
+| Last session closed | 2026-05-27 (Phase 2 session 2 — CLOSE) |
+| Last bundled commit | 2026-05-27 — Phase 2 session 2 bundle (raw-JSON-read pattern locked as Option B; second Bronze raw-text table + DDL; companion staging model + intermediate model `int_sec_edgar__concepts` exercising json_extract over 5 XBRL concepts; intermediate layer config re-added to dbt_project.yml; sql/verify/02 verification suite 6/6 PASS; DBT_PIPELINE.md section 7 shipped; 2 new LEARNINGS entries; .gitignore extended with dbt/.user.yml) |
 | Active blockers | None |
-| Open questions | Raw-JSON-read pattern for Bronze `facts` object — needed in Phase 2 session 2 for json_extract on canonical-concept reconciliation. Three architectural options identified (revise Bronze DDL, second Athena table over same S3 location, dbt-athena raw-S3 read macro); to be locked at session 2 kickoff. |
+| Open questions | None at the architectural level. Two known-and-deferred schema gaps in `int_sec_edgar__concepts` (concept aliasing not yet collapsed; no `period_start_date` column) addressed by the next intermediate model. |
 
 ---
 
@@ -88,6 +88,152 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-05-27 — Phase 2 session 2 — first intermediate model + raw-JSON-read pattern locked + verification 6/6 PASS
+
+**Goal.** Solve the raw-JSON-read pattern for Bronze `facts` (locked one of
+three options at session start via web-search-verify), then build the first
+intermediate model performing XBRL concept extraction over 5 representative
+concepts for the S&P 100. Re-add intermediate layer config to dbt_project.yml.
+Ship a verification suite parallel to Phase 1's pattern. Cross-reference
+extracted values against Apple's public 10-K filings before declaring the
+pipeline portfolio-ready.
+
+**What landed.**
+
+- **Raw-JSON-read pattern locked: Option B** (second Athena table over same
+  S3 location with a single text column). Three options compared via
+  web-search-verify against docs.aws.amazon.com (openx SerDe), docs.getdbt.com
+  (dbt-athena adapter), and github.com/dbt-athena/dbt-athena-external-tables.
+  Option A (extend openx with STRING column on nested object) rejected:
+  AWS docs only document nested JSON via struct typing — exactly what blew
+  Glue Catalog's 128KB cap on NVIDIA in Phase 1. Option C (dbt-external-tables
+  package) rejected: experimental Athena-specific package marked "USE AT
+  OWN RISK", 4 stars, dormant since v0.0.1 Aug 2024 — portfolio-disqualifying
+  dependency. Option B uses only documented Athena features, leaves the
+  Phase 1 verified Bronze surface untouched, needs no IAM policy changes.
+- **Second Bronze table shipped.** `sql/ddl/02_create_bronze_raw_text_table.sql`.
+  Manual DDL run via Athena Console under phil-admin (one-statement-at-a-time
+  per the Console constraint). LazySimpleSerDe via ROW FORMAT DELIMITED,
+  `FIELDS TERMINATED BY '\001'` (SOH — cannot appear unescaped in well-formed
+  JSON), single `json_text` column, same partition projection scheme as
+  the existing Bronze table. Sanity check: `length(json_text)` for Apple
+  returned 3,748,682 bytes (full file as one row, single-line minified JSON
+  confirmed).
+- **`.gitignore` extended.** `dbt/.user.yml` added inside the existing dbt
+  runtime-artefacts block. The file is dbt-generated per-developer-local
+  identity (random UUID on first invocation) that was accidentally committed
+  in Phase 2 session 1; `git rm --cached` in the session-2 bundled commit
+  stops tracking without deleting from disk.
+- **`dbt_project.yml` intermediate layer config re-added.**
+  `+materialized: view` under `models.financial_analytics.intermediate`.
+  Comment block status line flipped from "TO ADD: Phase 2 session 2" to
+  "ACTIVE: Phase 2 session 2 onwards". Warehouse + marts blocks still
+  parked in the comment as future scope.
+- **Second staging model.** `dbt/models/staging/stg_sec_edgar__companyfacts_raw.sql`
+  — 1:1 pass-through over the new Bronze raw-text source. Three columns:
+  cik, extract_date (cast to DATE), json_text. View materialization.
+- **First intermediate model — `int_sec_edgar__concepts`.**
+  `dbt/models/intermediate/int_sec_edgar__concepts.sql`. Jinja for-loop
+  over 5 in-scope XBRL concepts (Revenues, NetIncomeLoss, Assets, Liabilities,
+  StockholdersEquity), each block running `CROSS JOIN UNNEST(CAST(json_extract(...)
+  AS ARRAY(JSON)))` to flatten the per-period array into rows. Bracket-quote
+  JSONPath `'$.facts["us-gaap"].<concept>.units.USD'` (verified against
+  Trino JSON functions docs). Output schema: cik, extract_date, concept_name,
+  unit, period_end_date, period_form_type, period_fiscal_year,
+  period_fiscal_period, value (DECIMAL(28,2)). `TRY_CAST` on numerics
+  defends against malformed source JSON. View materialization.
+- **`dbt/models/intermediate/_models.yml`.** Column contracts + schema
+  tests for the new intermediate model. `not_null` on cik / extract_date /
+  concept_name / unit. `accepted_values` on concept_name (the 5 in-scope
+  concepts) and unit (USD only). MissingArgumentsPropertyInGenericTestDeprecation
+  surfaced on first parse — `accepted_values` arguments now need to nest
+  under an `arguments` property per dbt-core 1.10.5+ change. Fixed in-session;
+  banked as a LEARNINGS entry on second-consecutive criterion-6-proactive-bypass
+  miss.
+- **`dbt/models/staging/_sources.yml` extended.** Second Bronze source
+  declared (`sec_edgar_companyfacts_raw`). Column contracts on json_text +
+  partition keys.
+- **`sql/verify/02_phase2_silver_intermediate_verification.sql` shipped.**
+  Parallel CTE-based PASS/FAIL pattern to Phase 1's verification suite.
+  Six checks: Bronze raw-text row count for Apple, raw-text json byte
+  length floor (≥1 MB sanity), intermediate distinct concept count, and
+  Apple FY2018/FY2017/FY2016 annual Revenues reconciliation to public 10-K
+  filings ($265.595B / $229.234B / $215.639B respectively). 6/6 PASS in
+  1.767 sec, ~3 MB scanned.
+- **`DBT_PIPELINE.md` section 7 flipped from TBD to shipped.** Full
+  architectural decision record (Option A/B/C compared with verified
+  rationale), second Bronze table walkthrough, staging fanout explanation,
+  first intermediate model design (Jinja for-loop, JSONPath quoting,
+  UNNEST flattening), known limitations (concept aliasing + missing
+  period_start_date) with explicit next-iteration plan, verification
+  surface summary.
+- **LEARNINGS.md** — two new entries banked: (1) raw-JSON-read pattern
+  lock as Option B with the three-option comparison preserved for portfolio
+  context, including the WHY behind rejecting A (re-litigating Phase 1
+  unverified claim) and C (experimental package optics); (2) criterion-6
+  proactive-bypass miss on _models.yml — second consecutive session
+  surfacing a parse-time warning on a new tool/adapter config file that
+  the Phase 2 session 1 LEARNINGS entry should have caught at file-creation
+  time.
+
+**10-criteria audit at session close.** 10/10 PASS with one criterion-6
+footnote (dbt parse zero warnings only AFTER fixing the
+MissingArgumentsPropertyInGenericTestDeprecation that fired on first parse).
+Tick-box table delivered in chat at close.
+
+**Decisions locked this session.**
+
+- **Raw-JSON-read pattern → Option B** (second Bronze table). Locked for
+  the rest of Project #3. The pattern carries to future per-source raw-text
+  Bronze tables (e.g. Yahoo Finance stock-price JSON, FRED macro JSON if
+  introduced in mini-projects).
+- **JSONPath bracket-and-double-quote form** as the project convention for
+  any key containing special characters (hyphens, dots, spaces). Verified
+  against Trino JSON functions docs. Applies to every json_extract /
+  json_extract_scalar call in any future dbt model.
+- **TRY_CAST defaulting on numeric extraction** from source JSON. Defensive
+  coding standard for any future intermediate/warehouse model reading
+  external JSON.
+
+**Blockers / surprises.** Two operational surprises, both banked or
+addressed:
+
+- MissingArgumentsPropertyInGenericTestDeprecation on first dbt parse
+  (dbt-core 1.10.5+ change to generic test argument structure). Fixed
+  in-session; LEARNINGS entry banked.
+- Apple's bare `Revenues` XBRL tag only returns FY2018 and prior filings
+  (Apple switched to RevenueFromContractWithCustomerExcludingAssessedTax
+  on ASC 606 adoption FY2019+). NOT a bug — exactly the canonical-concept
+  reconciliation problem the next intermediate model solves. Surfaced
+  naturally during verification; flagged in the section-7 walkthrough and
+  the session-3 scope.
+
+**NOT in this session — deferred.**
+
+- **Canonical-concept reconciliation intermediate model** → Phase 2 session 3.
+  Maps Revenues / SalesRevenueNet / RevenueFromContractWithCustomerExcludingAssessedTax
+  → canonical `revenue` (and similar aliasing for the other 4 concepts).
+- **`period_start_date` column on the intermediate model** → Phase 2
+  session 3. Needed to disambiguate annual periods from quarterly periods
+  that share an end-of-fiscal-year date.
+- **First warehouse model (Data Vault 2.0 hub_company)** → Phase 2 session 3
+  or 4 once canonical-concept reconciliation lands.
+- **Multi-unit support on int_sec_edgar__concepts** (currently USD only)
+  → Phase 2 session 3+ if needed; defer until a non-USD concept is in
+  scope. Most S&P 100 financial statement line items are USD.
+- **Schema tests on the staging models** → next time they're materially
+  edited.
+- **Delete `dbt/models/intermediate/.gitkeep`** stale resource → handled
+  by Phil in PowerShell as part of the session-2 bundled commit.
+
+**Next session.** Phase 2 session 3 — canonical-concept reconciliation
+intermediate model + period_start_date schema addition + (stretch) first
+warehouse-layer Data Vault 2.0 hub. Est. 60-90 min. Web-search-verify
+discipline for any non-trivial UNION/case statement covering the alias
+mapping. Three-layer doc pattern as usual; LEARNINGS bank at close.
+
+---
 
 ### 2026-05-25 — Phase 2 session 1 — dbt-athena scaffolding + first staging model + four LEARNINGS banked
 
@@ -591,7 +737,7 @@ full-100 scale-up.
 
 ---
 
-## Files in the project (Phase 2 session 1 close inventory — 2026-05-25)
+## Files in the project (Phase 2 session 2 close inventory — 2026-05-27)
 
 Doc-shaped:
 
@@ -602,9 +748,9 @@ Doc-shaped:
 - `TEACHING_PREFERENCES.md` ✓ (Phase 2 session 1 — third re-lock on paste-able discipline)
 - `ENGINEERING_STANDARDS.md` ✓
 - `GLOSSARY.md` ✓
-- `LEARNINGS.md` ✓ (17 Project #3 entries — 10 sessions 1-3 + 3 session 4 + 4 Phase 2 session 1)
+- `LEARNINGS.md` ✓ (19 Project #3 entries — 10 sessions 1-3 + 3 session 4 + 4 Phase 2 session 1 + 2 Phase 2 session 2)
 - `EXTRACT_PIPELINE.md` ✓ (Phase 1 walkthrough — frozen at Phase 1 close)
-- `DBT_PIPELINE.md` ✓ (Phase 2 session 1 — sections 1-6, 9, 10 shipped; sections 7-8 expand at Phase 2 sessions 2-3+)
+- `DBT_PIPELINE.md` ✓ (Phase 2 session 2 — sections 1-7, 9, 10 shipped; section 8 expands at Phase 2 session 3+)
 
 Code-shaped:
 
@@ -612,14 +758,18 @@ Code-shaped:
 - `scripts/extract_sec_edgar.py` ✓ (Phase 1 sessions 2-4)
 - `scripts/verify_bronze_s3_metadata.py` ✓ (Phase 1 session 4)
 - `sql/ddl/01_create_bronze_tables.sql` ✓ (Phase 1 session 3)
+- `sql/ddl/02_create_bronze_raw_text_table.sql` ✓ (Phase 2 session 2 — second Bronze table, raw-text view over same S3 location)
 - `sql/verify/01_phase1_bronze_verification.sql` ✓ (Phase 1 sessions 3-4)
-- `iam/lakehouse_dbt_runtime_policy.json` ✓ (Phase 2 session 1 — Customer Managed Policy JSON for phil-dbt)
-- `dbt/dbt_project.yml` ✓ (Phase 2 session 1 — project config + flags.warn_error_options.silence)
+- `sql/verify/02_phase2_silver_intermediate_verification.sql` ✓ (Phase 2 session 2 — 6/6 PASS)
+- `iam/lakehouse_dbt_runtime_policy.json` ✓ (Phase 2 session 1 — Customer Managed Policy JSON for phil-dbt; Phase 2 session 2 — coverage validated, no edits needed)
+- `dbt/dbt_project.yml` ✓ (Phase 2 session 1; Phase 2 session 2 — intermediate +materialized: view re-added)
 - `dbt/profiles.yml.example` ✓ (Phase 2 session 1 — env_var template, real profiles.yml gitignored)
 - `dbt/packages.yml` ✓ (Phase 2 session 1 — dbt_utils 1.x)
-- `dbt/models/staging/_sources.yml` ✓ (Phase 2 session 1 — Bronze source declaration)
-- `dbt/models/staging/stg_sec_edgar__companyfacts.sql` ✓ (Phase 2 session 1 — first staging model, PASSING)
-- `dbt/models/intermediate/.gitkeep` (Phase 2 session 1 — placeholder until session 2 first intermediate model)
+- `dbt/models/staging/_sources.yml` ✓ (Phase 2 session 1; Phase 2 session 2 — second Bronze source declared)
+- `dbt/models/staging/stg_sec_edgar__companyfacts.sql` ✓ (Phase 2 session 1 — typed cover-page staging model, PASSING)
+- `dbt/models/staging/stg_sec_edgar__companyfacts_raw.sql` ✓ (Phase 2 session 2 — raw-text staging model, PASSING)
+- `dbt/models/intermediate/int_sec_edgar__concepts.sql` ✓ (Phase 2 session 2 — first intermediate model, PASSING)
+- `dbt/models/intermediate/_models.yml` ✓ (Phase 2 session 2 — intermediate-layer model contracts)
 - `dbt/models/warehouse/.gitkeep` (Phase 2 session 1 — placeholder until session 3+ first DV2.0 model)
 - `dbt/models/marts/.gitkeep` (Phase 2 session 1 — placeholder until Phase 4 first mart model)
 - `.vscode/settings.json` ✓ (Phase 2 session 1 — yaml.schemas override for dbt_project.yml)
@@ -637,6 +787,9 @@ AWS infrastructure (provisioned via Console, not yet captured as IaC):
 - Glue Crawler `crawler_bronze_sec_edgar` (Phase 1 session 3 — retained scaffolding)
 - Athena workgroup `wg_financial_analytics` (Phase 1 session 3)
 - Glue Catalog view `financial_analytics_silver.stg_sec_edgar__companyfacts` (Phase 2 session 1 — dbt-managed)
+- Glue Catalog table `financial_analytics_bronze.sec_edgar_companyfacts_raw` (Phase 2 session 2 — second raw-text Bronze table over same S3 location; manual DDL)
+- Glue Catalog view `financial_analytics_silver.stg_sec_edgar__companyfacts_raw` (Phase 2 session 2 — dbt-managed)
+- Glue Catalog view `financial_analytics_silver.int_sec_edgar__concepts` (Phase 2 session 2 — dbt-managed; first intermediate model)
 
 Repo-config:
 
@@ -660,6 +813,6 @@ Repo-config:
 
 ---
 
-*Last updated: 2026-05-25 (Phase 2 session 1 close — dbt-athena scaffolding
-landed, first staging model PASSING, end-to-end pipeline proven). Append
-a session-log entry at every session close.*
+*Last updated: 2026-05-27 (Phase 2 session 2 close — raw-JSON-read pattern
+locked, first intermediate model live, verification suite 6/6 PASS against
+Apple's public 10-K filings). Append a session-log entry at every session close.*

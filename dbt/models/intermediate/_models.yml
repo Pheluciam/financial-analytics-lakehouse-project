@@ -1,0 +1,89 @@
+# Intermediate layer model contracts.
+#
+# Documents the upstream/downstream contract per ENGINEERING_STANDARDS
+# criterion 7. Schema tests run via `dbt test`; data tests live alongside
+# (none in this session — to add once warehouse-layer consumers exist).
+
+version: 2
+
+models:
+  - name: int_sec_edgar__concepts
+    description: |
+      Long-format XBRL concept panel extracted from the SEC EDGAR
+      companyfacts raw JSON. One row per (cik, concept_name, period) triple.
+      Scope this session: 5 universally-reported concepts across the S&P 100
+      (Revenues, NetIncomeLoss, Assets, Liabilities, StockholdersEquity),
+      USD unit only. Canonical-concept reconciliation (collapsing
+      Revenues / SalesRevenueNet / Revenue → "revenue") is the NEXT
+      intermediate model. Materialized as a view.
+    columns:
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. Inherited from the
+          partition column on the Bronze source.
+        tests:
+          - not_null
+
+      - name: extract_date
+        description: |
+          DATE the extract ran. Cast from the partition projection string
+          in the staging layer.
+        tests:
+          - not_null
+
+      - name: concept_name
+        description: |
+          Raw XBRL concept name as reported under facts.us-gaap. One of
+          the 5 in the intermediate model's concept list this session.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'Revenues'
+                  - 'NetIncomeLoss'
+                  - 'Assets'
+                  - 'Liabilities'
+                  - 'StockholdersEquity'
+
+      - name: unit
+        description: |
+          Reporting unit for the value. 'USD' for all rows this session
+          (the JSONPath hardcodes .units.USD). Multi-unit support is
+          future scope.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['USD']
+
+      - name: period_end_date
+        description: |
+          Calendar date the reported value applies to (end of the
+          reporting period — quarter end, year end, etc.). DATE.
+
+      - name: period_form_type
+        description: |
+          SEC form type filed for this period — 10-K (annual), 10-Q
+          (quarterly), 10-K/A and 10-Q/A (amendments), 8-K (current
+          report), etc.
+
+      - name: period_fiscal_year
+        description: |
+          Fiscal year as reported by the company. May not align with
+          calendar year (Apple's FY ends in late September, for example).
+          INTEGER. TRY_CAST in the model — NULL when the source JSON
+          lacks fy for an entry.
+
+      - name: period_fiscal_period
+        description: |
+          Fiscal period code. FY = full year, Q1/Q2/Q3 = quarters
+          (Q4 is implied from FY minus Q1+Q2+Q3 by SEC convention).
+
+      - name: value
+        description: |
+          Reported value for the (concept, period) pair, in the unit
+          named in the unit column. DECIMAL(28,2) — handles values up to
+          ~10^26, comfortably above any S&P 100 company's balance-sheet
+          scale. TRY_CAST — NULL when the source JSON's val field
+          cannot be parsed as numeric.
