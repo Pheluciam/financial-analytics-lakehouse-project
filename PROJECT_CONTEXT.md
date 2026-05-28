@@ -15,12 +15,12 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 2 in progress.** Session 6 CLOSED 2026-05-28 — first DV2.0 satellite (sat_filing_metadata) shipped end-to-end. Parent = hub_filing, 2 truly filing-level payload attributes (form_type + filed_date) after a within-session scope correction from the initial 6-column design (cardinality miss surfaced — period/fiscal attributes are per-period-instance, not per-filing, broke the 1:1 invariant; Risk 12 banked with carry-forward cardinality-test discipline). SCD-2 insert-on-change via NOT EXISTS anti-join on latest-hashdiff-per-parent — fundamentally different mechanic from hub/link NOT IN. COALESCE-sentinel hashdiff defeats Trino concat NULL propagation. Dedicated sat hash key over (hub_filing_hk \|\| '\|\|' \|\| load_datetime) keeps the warehouse-layer surface visually consistent. 11/11 dbt schema tests PASS (including dbt_utils.unique_combination_of_columns on the composite natural PK + relationships FK + 7 not_null). 11/11 SQL structural verify PASS in 2.6 sec — 6,551 rows = hub_filing parent count = 1:1 cardinality invariant. Idempotency proven via second-run [OK 0] exercising the anti-join filter. Five new forward-projected risks banked (Risks 8/9/10/11 at kickoff forward-verify + Risk 12 at first-run cardinality miss). |
-| Next phase | Phase 2 session 7 — next DV2.0 model. Likely sat_company_metadata (parent = hub_company, 1:1 payload = entityName from companyfacts JSON top level — simpler satellite, exercises the 1:1 invariant explicitly) OR sat_concept_value (parent = link_company_filing OR a new hub_concept; carries the actual XBRL fact values + period-instance attributes that got deferred from sat_filing_metadata in session 6). The hub_period + link_filing_period split is the other defensible direction if we want to model temporal grain explicitly. Whichever picks up first, the forward-verify pass re-fires per the standing rule. Est. 60-90 min. |
-| Last session closed | 2026-05-28 (Phase 2 session 6 — CLOSE) |
-| Last bundled commit | 2026-05-28 — Phase 2 session 6 bundle (sat_filing_metadata.sql with 2-col payload + SCD-2 anti-join filter + COALESCE hashdiff; warehouse/_models.yml extended with sat block + dbt_utils.unique_combination_of_columns; sql/verify/05 11-check structural verify; DBT_PIPELINE.md sections 8.11/8.12/8.13 covering satellite framing + SCD-2 mechanic walkthrough + verify/05 surface + Risk 12 scope-correction explainer; GLOSSARY.md Hashdiff entry; LEARNINGS.md Risks 8/9/10/11 at forward-verify pass + Risk 12 at first-run cardinality miss with cardinality-test + test-ordering carry-forward principles) |
+| Active phase | **Phase 2 in progress.** Session 7 CLOSED 2026-05-28 — second DV2.0 satellite (sat_company_metadata) shipped end-to-end. Parent = hub_company, 1 truly company-level payload attribute (entity_name) from $.entityName top-level field via the typed cover-page staging — no JSON walk, no UNNEST, no Jinja for-loop; materially simpler model body than session 6. Forward-verify pass at kickoff surfaced an empirical cardinality fact via probe against actual Bronze: 101 rows / 100 distinct CIKs / 2 distinct extract_dates / 100 distinct entityNames — one CIK extracted twice with the SAME entityName both times. Naive read of staging would have shipped 101 sat rows on first load, breaking the 1:1 invariant; DISTINCT (cik, entity_name) collapses cleanly to 100. Risk 13 banked with empirical-probe-over-inferred-parity carry-forward: every future satellite forward-verify pass includes an empirical cardinality probe against actual Bronze, not just function-chain doc-verify. 10/10 dbt schema tests PASS (dbt_utils composite-PK + relationships FK + 8 column-level). 11/11 SQL structural verify PASS in 2.55 sec — 100 rows = hub_company parent count = 1:1 invariant directly proven via check_08 parent coverage parity. Cumulative warehouse-layer: 43/43 dbt schema tests + 44/44 SQL structural verify all-green. Idempotency proven via second-run [OK 0 in 27.01s] exercising the anti-join filter. 10/10 ENGINEERING_STANDARDS audit PASS (tick-box format). |
+| Next phase | Phase 2 session 8 — next DV2.0 model. Likely sat_concept_value with the period-attribute home decision baked in — carries the actual XBRL fact values + the per-period-instance attributes deferred from sat_filing_metadata in session 6. Bigger scope than sat_company_metadata: needs an architectural call on hub_period + link_filing_period split (textbook DV2.0 temporal-grain decomposition) versus baked into sat_concept_value payload (denser, less decomposed). Forward-verify pass re-fires per the standing rule — new architectural pattern qualifies. Est. 60-90 min. |
+| Last session closed | 2026-05-28 (Phase 2 session 7 — CLOSE) |
+| Last bundled commit | 2026-05-28 — Phase 2 session 7 bundle (sat_company_metadata.sql with single-column COALESCE hashdiff + DISTINCT (cik, entity_name) collapse defending against Bronze cardinality drift; warehouse/_models.yml extended with sat_company_metadata block + dbt_utils.unique_combination_of_columns + stale-description fix on sat_filing_metadata hashdiff column; sql/verify/06 11-check structural verify; DBT_PIPELINE.md sections 8.14/8.15 covering simpler-vs-session-6 framing + cardinality probe artefact + verify/06 surface + cumulative warehouse-layer test stats; LEARNINGS.md Risk 13 with empirical-probe-over-inferred-parity carry-forward principle + verify-then-write sub-note on table-name miss) |
 | Active blockers | None |
-| Open questions | None at the architectural level. The period/fiscal attribute home (hub_period vs sat_concept_value) is a forward design call, parked until session 7 needs it. |
+| Open questions | None at the architectural level. The period/fiscal attribute home (hub_period + link_filing_period split vs baked into sat_concept_value) is the next forward design call, sized for session 8's forward-verify pass. |
 
 ---
 
@@ -88,6 +88,212 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-05-28 — Phase 2 session 7 — second DV2.0 satellite (sat_company_metadata) + empirical-probe-over-inferred-parity carry-forward (Risk 13) + 11/11 structural verify PASS + cumulative 43/43 warehouse-layer test all-green
+
+**Goal.** Ship the second DV2.0 satellite — sat_company_metadata,
+parent = hub_company, payload = entity_name from $.entityName
+top-level companyfacts JSON field. Exercise the 1:1 cardinality
+invariant explicitly at the simplest satellite shape so the
+Risk 12 carry-forward discipline (cardinality-test at design
+time, test-ordering by cost, forward-verify-pass includes
+cardinality reasoning) gets a clean working example. First
+activity = phase-kickoff forward-verify pass per the standing
+rule.
+
+**Forward-verify pass (fourth time the rule applied).**
+Restricted-domain web-search-verify against sec.gov (companyfacts
+JSON top-level structure — confirmed $.entityName by fetching
+Apple's live companyfacts and inspecting the first bytes:
+`{"cik":320193,"entityName":"..."`) and scalefree.com (DV2.0 1:1
+satellite pattern reaffirmation). New element this session per
+Risk 12 + the now-banked Risk 13: empirical cardinality probe
+against actual Bronze BEFORE writing the model.
+
+The probe surfaced an empirical cardinality fact that the
+inferred-parity argument (parent = 100, payload = top-level field,
+expected first-load = 100) had missed. Phil ran via Athena:
+
+```sql
+SELECT
+    COUNT(*) AS total_bronze_rows,
+    COUNT(DISTINCT cik) AS distinct_ciks,
+    COUNT(DISTINCT extract_date) AS distinct_extract_dates,
+    COUNT(DISTINCT json_extract_scalar(json_text, '$.entityName')) AS distinct_entity_names
+FROM financial_analytics_bronze.sec_edgar_companyfacts_raw;
+```
+
+Result: 101 / 100 / 2 / 100. One CIK had been extracted twice on
+two different dates (likely a Phase 1 ingestion re-run mid-session
+for one company), with the SAME entity_name across both extract
+rows. Naive read of staging without DISTINCT would have shipped
+101 satellite rows on first load, breaking the 1:1 invariant with
+hub_company. DISTINCT (cik, entity_name) baked into the model's
+distinct_companies CTE before any code ran. Risk 13 banked with
+the carry-forward principle: every future satellite's
+forward-verify pass includes the same four-aggregate empirical
+probe against actual Bronze, not just function-chain doc-verify.
+
+**Sub-note within the forward-verify pass — table-name verify-then-write miss.**
+First attempt at the empirical probe used a guessed table name
+(`bronze_sec_edgar_companyfacts_raw_text` — Claude's read-from-memory
+guess) that returned `TABLE_NOT_FOUND`. Actual table name from the
+session-2 DDL is `sec_edgar_companyfacts_raw` (no `bronze_`
+prefix). Caught immediately (Phil pasted the error, fix landed in
+one round) but it's a verify-then-write category miss adjacent to
+the criterion-6 proactive-bypass rule. Banked as a sub-note on
+Risk 13 with carry-forward: for any diagnostic query targeting a
+table identifier Claude hasn't recently written, grep the project
+for the canonical identifier first.
+
+**What landed.**
+
+- **`dbt/models/warehouse/sat_company_metadata.sql` shipped.**
+  Second DV2.0 satellite. Parent = hub_company. 1 truly
+  company-level payload attribute: entity_name (from
+  $.entityName top-level field, exposed by the typed cover-page
+  staging stg_sec_edgar__companyfacts — the openx SerDe handles
+  the JSON-to-typed-column mapping at table creation time).
+  Materially simpler model body than session 6 — no Jinja
+  for-loop, no CROSS JOIN UNNEST. DISTINCT (cik, entity_name)
+  collapse defends against Bronze cardinality drift (Risk 13).
+  Dedicated sat_company_metadata_hk = SHA-256 hash over
+  (hub_company_hk || '||' || CAST(load_datetime AS varchar)) —
+  visual-consistency carry from session 6. hashdiff = SHA-256
+  over COALESCE(entity_name, '^^') — single-column payload, no
+  '||' delimiter required (delimiter defends against
+  multi-column concat ambiguity, not present here). SCD-2
+  insert-on-change via NOT EXISTS anti-join on
+  latest-hashdiff-per-parent — identical pattern to
+  sat_filing_metadata.
+- **`dbt/models/warehouse/_models.yml` extended.** sat_company_metadata
+  block — 7 columns (sat_company_metadata_hk, hashdiff,
+  hub_company_hk, cik, entity_name, load_datetime,
+  record_source), 9 column-level tests, + 1 model-level
+  dbt_utils.unique_combination_of_columns on the composite
+  natural PK (hub_company_hk, load_datetime). 10 schema tests
+  total. dbt_utils argument-nesting structure inherited from
+  the session-6 working example — no new proactive-bypass
+  invocation needed since the test type was already locked at
+  session 6. Stale-description fix on sat_filing_metadata
+  hashdiff column applied at the same edit ("6 payload columns"
+  corrected to "2 payload columns" with a note on the session-6
+  scope trim).
+- **`sql/verify/06_phase2_warehouse_sat_company_metadata_verification.sql`
+  shipped.** Parallel CTE PASS/FAIL pattern to verify/05. 11
+  checks: sat hash key uniqueness + not_null + length 64,
+  hashdiff not_null + length 64, FK closure to hub_company,
+  composite natural PK (hub_company_hk, load_datetime)
+  uniqueness, parent coverage parity (sat distinct parent count
+  = hub_company count = 100 — the 1:1 invariant guard, Risk 13
+  run-time counterpart to the design-time empirical probe),
+  sat_hk + hashdiff reproducibility on Apple (cik 0000320193 —
+  simpler than session-6 verify/05 because 1:1 with hub_company
+  means a direct cik filter, no min-accession join chain),
+  record_source constant. 11/11 PASS in 2.55 sec.
+- **DBT_PIPELINE.md sections 8.14 / 8.15 shipped.** 8.14 frames
+  sat_company_metadata as the second satellite inheriting the
+  session-6 pattern with a materially simpler model body
+  (entityName is a top-level field, no UNNEST), surfaces the
+  forward-verify cardinality probe artefact (the four-aggregate
+  Athena query + empirical result 101/100/2/100 + the SCD-2
+  contract validity note for future loads), explains why the
+  hashdiff function chain drops the '||' delimiter for a
+  single-column payload. 8.15 walks through verify/06's 11-check
+  surface + cumulative warehouse-layer test stats: 43/43 schema
+  tests + 44/44 SQL structural checks all-green.
+- **LEARNINGS.md** — Risk 13 banked at the kickoff forward-verify
+  pass (BEFORE any code shipped, per the rule). Title: "Bronze
+  cardinality drift across extract_dates breaks naive parent-count
+  inference: empirical cardinality probe mandatory at every
+  satellite forward-verify pass." Carry-forward: empirical probe
+  over inferred parity. Sub-note: verify-then-write miss on the
+  table name `sec_edgar_companyfacts_raw` (Claude's `bronze_`-prefixed
+  guess was wrong). Carry-forward for diagnostic identifier
+  references: grep the project for canonical identifier first.
+
+**Verification surface at session 7 close.**
+
+- 10/10 dbt schema tests PASS on sat_company_metadata's 7 columns
+  + composite-PK test (2 hk + 1 hashdiff + 2 FK + 1 cik + 1
+  entity_name + 1 LDTS + 1 RSRC + 1 composite)
+- 43/43 dbt schema tests PASS across the warehouse layer
+  (cumulative — 6 hub_company + 6 hub_filing + 10 link + 11
+  sat_filing_metadata + 10 sat_company_metadata) in 43.71 sec
+- 11/11 SQL structural verify PASS for sat_company_metadata
+  (2.55 sec)
+- 44/44 SQL structural verify PASS across the warehouse layer
+  (cumulative — 9 verify/03 + 13 verify/04 + 11 verify/05 + 11
+  verify/06)
+- 10/10 ENGINEERING_STANDARDS tick-box audit PASS (Currency,
+  Compactness, Resource efficiency, Privacy & security, Workflow
+  consistency, Dev env hygiene, Upstream/downstream contract,
+  Idempotency, Pre/post verification, Observable progress)
+- Idempotency proven: second dbt run [OK 0 in 27.01s] — anti-join
+  filter excluded every inbound row whose hashdiff matched the
+  latest stored hashdiff
+- `dbt parse` implicitly clean (would have errored at dbt run
+  otherwise)
+
+**Decisions locked this session (at the forward-verify pass).**
+
+- **Satellite source for top-level JSON fields = typed cover-page
+  staging** (stg_sec_edgar__companyfacts), NOT raw-text staging +
+  json_extract. When the upstream openx SerDe has already mapped
+  the JSON field to a typed column, the sat trusts that work.
+  Reserves the raw-text staging + UNNEST pattern for satellites
+  whose payload lives in deeply-nested arrays (sat_filing_metadata,
+  future sat_concept_value).
+- **Single-column hashdiff drops the '||' delimiter.** The
+  delimiter is a defense against multi-column concat ambiguity
+  that doesn't exist with one column. COALESCE-to-'^^' sentinel
+  still applies as project standard defensive shield against
+  Trino's concat NULL propagation. Pattern: SHA-256 over
+  COALESCE(payload, '^^') directly when payload is a single
+  column; SHA-256 over COALESCE(col_1, '^^') || '||' ||
+  COALESCE(col_2, '^^') || ... for multi-column payloads.
+- **Forward-verify cardinality probe = four-aggregate signature.**
+  COUNT(*) / COUNT(DISTINCT business_key) / COUNT(DISTINCT
+  extract_date_or_load_partition) / COUNT(DISTINCT payload_concat).
+  Run against actual Bronze BEFORE writing any satellite model.
+  If those four numbers don't match the parent hub count exactly,
+  name the collapse mechanism and bake it into the model's
+  source-side CTE.
+
+**Blockers / surprises.** One within-session miss surfaced
+during the forward-verify pass — Claude guessed the Bronze
+raw-text table name with a stale `bronze_` prefix, hit
+TABLE_NOT_FOUND. Phil pasted the error, Claude grepped the DDL,
+fix landed in one round. Banked as a Risk 13 sub-note carry-forward.
+Net session impact: ~30 seconds. Also a process miss — the 10-point
+ENGINEERING_STANDARDS audit wasn't on the task list at kickoff;
+Phil flagged it post-idempotency-proof, added as task #8 ahead
+of docs update so any FAIL could surface in time for code fix.
+Audit landed 10/10 PASS so no code change required, but the
+oversight goes into the carry-forward bank: future session
+kickoffs include the audit as an explicit task from the start.
+
+**NOT in this session — deferred.**
+
+- **Period/fiscal attribute model home** (hub_period +
+  link_filing_period split vs baked into sat_concept_value) →
+  Phase 2 session 8. Forward design call, sized for its own
+  forward-verify pass per the standing rule.
+- **sat_concept_value + sat_concept_canonical** → Phase 2 session
+  8+ as needed by the Gold marts in Phase 4.
+- **hub_concept + hub_period + remaining links** → Phase 2 session
+  8+ as needed by the period/fiscal attribute design call.
+- **README.md Status line refresh** → Phase 2 close (per session
+  3+ close deferral, still parked).
+
+**Next session.** Phase 2 session 8 — next DV2.0 model. Likely
+sat_concept_value with the period-attribute home decision baked
+in. First activity = phase-kickoff forward-verify pass per the
+standing rule (new architectural pattern qualifies — period-grain
+modeling is genuinely different from the single-parent satellite
+shape established in sessions 6 + 7). Est. 60-90 min.
+
+---
 
 ### 2026-05-28 — Phase 2 session 6 — first DV2.0 satellite (sat_filing_metadata) + SCD-2 anti-join filter + within-session cardinality scope correction + 11/11 structural verify PASS
 

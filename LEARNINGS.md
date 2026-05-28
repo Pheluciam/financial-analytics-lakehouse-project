@@ -495,6 +495,29 @@ The window function picks the latest stored row per parent; the NOT EXISTS claus
 
 **Carry-forward principle — forward-verify pass must include cardinality reasoning, not just function-chain reasoning.** Session 6 kickoff forward-verify pass surfaced Risks 8/9/10/11 around hashdiff mechanics, source-side filter shape, unique_key construction, and DISTINCT discipline — but did NOT reason about whether the selected payload columns were 1:1 with the parent. That class of question (model-grain-vs-payload-grain) is now part of every future forward-verify pass: before locking the payload column list, name the expected first-load row count and confirm it equals the parent hub count for a 1:1 satellite. The 30-second check belongs at design time, not at first-run time.
 
+#### Risk 13 — Bronze cardinality drift across extract_dates breaks naive parent-count inference: empirical cardinality probe mandatory at every satellite forward-verify pass (banked 2026-05-28, Phase 2 session 7 forward-verify pass)
+
+**Diagnosis (forward-projected, caught at design time per the Risk 12 carry-forward principle).** At Phase 2 session 7 kickoff, the forward-verify pass for sat_company_metadata reached the cardinality-reasoning step (locked at Risk 12). Naive inference would have read: "parent = hub_company has 100 rows; payload = entity_name from companyfacts top-level $.entityName; expected first-load = 100 rows = 1:1 invariant satisfied." The Risk 12 carry-forward says: name the expected row count AND confirm against actual data, not just authoritative docs. Phil ran the empirical probe via Athena:
+
+```sql
+SELECT
+    COUNT(*) AS total_bronze_rows,
+    COUNT(DISTINCT cik) AS distinct_ciks,
+    COUNT(DISTINCT extract_date) AS distinct_extract_dates,
+    COUNT(DISTINCT json_extract_scalar(json_text, '$.entityName')) AS distinct_entity_names
+FROM financial_analytics_bronze.sec_edgar_companyfacts_raw;
+```
+
+Result: 101 rows / 100 distinct CIKs / 2 distinct extract_dates / 100 distinct entityNames. ONE CIK had been extracted twice on two different dates (likely a Phase 1 ingestion re-run mid-session for one company). The duplicate CIK carries the SAME entityName in both extract rows. Reading staging directly without DISTINCT would have shipped 101 satellite rows on first load, breaking the 1:1 invariant with hub_company (100). The naive parent-count inference (100 = 100) was correct as a TARGET but wrong as a PREDICTION of what the source-side row count would actually be — the gap between target and actual is the cardinality drift.
+
+**Verified empirically.** Probe query above. The forward-verify pass earned its keep at design time, not first-run time — DISTINCT (cik, entity_name) collapse baked into the model's distinct_companies CTE before any code shipped. First dbt run delivered [OK 100 in 13.75s] exactly as predicted by the post-probe design; verify/06 check_08 (parent coverage parity) PASS confirmed the 1:1 invariant held in the materialized output.
+
+**Fix (locked at this forward-verify pass, applies to every future satellite).** Every satellite's forward-verify pass now includes an empirical cardinality probe against actual Bronze BEFORE writing the model. The probe shape is the same four-aggregate signature: COUNT(*) / COUNT(DISTINCT business_key) / COUNT(DISTINCT extract_date_or_load_partition) / COUNT(DISTINCT payload_concat). If those four numbers don't match the parent hub count exactly, name the collapse mechanism (DISTINCT clause, latest-extract-only filter, etc.) and bake it into the model's source-side CTE. Cardinality probe artefact lives in DBT_PIPELINE.md section 8.14+ as the per-model forward-verify exhibit.
+
+**Carry-forward principle — empirical probe over inferred parity for cardinality reasoning.** Risk 12 locked "forward-verify pass must include cardinality reasoning, not just function-chain reasoning"; Risk 13 strengthens that to "the reasoning must be empirical against actual data, not inferred from parent-count + structural-shape arguments alone." The senior-DE discipline: doc-verify the function chain (what SHA-256 chain works on Athena, what arguments nest under which YAML property), THEN data-verify the cardinality (what does the actual Bronze look like, and what collapse mechanism is required). Both are part of the standing forward-verify pass.
+
+**Sub-note (same diagnostic loop).** First attempt at the empirical probe used a guessed table name (`bronze_sec_edgar_companyfacts_raw_text` — Claude's read-from-memory guess for the second Bronze table) that returned TABLE_NOT_FOUND in Athena. Actual table name from the Phase 2 session 2 DDL is `sec_edgar_companyfacts_raw` (no `bronze_` prefix). Verify-then-write discipline says: grep the DDL or the source('bronze', 'X') call before writing identifier-bearing diagnostic queries, especially when AWS Glue Catalog table names sometimes diverge from project naming pattern. The miss was caught immediately (Phil pasted the error, fix landed in one round), but it's a verify-then-write category miss adjacent to the criterion-6 proactive-bypass rule. Carry-forward: for any diagnostic query targeting a table identifier Claude hasn't recently written, grep the project for the canonical identifier first.
+
 ---
 
 ### Banked open items from session 1 (not lessons, but trackable)

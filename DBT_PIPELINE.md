@@ -862,6 +862,108 @@ matches the latest stored hashdiff for the same parent. Same
 pattern as hubs/links but the mechanic that gets exercised is
 different (anti-join, not NOT IN).
 
+### 8.14 Second satellite: sat_company_metadata (Phase 2 session 7)
+
+`dbt/models/warehouse/sat_company_metadata.sql` — second DV2.0
+satellite. Parent = hub_company (cik business key). Carries one
+payload attribute: entity_name (the company's registered name as
+reported to SEC EDGAR — e.g., 'Apple Inc.', 'Microsoft Corp').
+1:1 cardinality with hub_company on first load — 100 rows = S&P
+100 universe size.
+
+The model body is materially simpler than sat_filing_metadata
+because entity_name is a top-level JSON field already exposed by
+the typed cover-page staging (`stg_sec_edgar__companyfacts`,
+which the Bronze openx SerDe maps from $.entityName at table
+creation time). No Jinja for-loop, no CROSS JOIN UNNEST over a
+concept list — just a DISTINCT (cik, entity_name) collapse +
+hash computation + the inherited NOT EXISTS anti-join filter.
+
+The session-7 forward-verify pass surfaced the cardinality
+discipline that Risk 12 (banked at session 6) had locked as a
+carry-forward principle. The pass included an explicit empirical
+probe against Bronze BEFORE any SQL shipped:
+
+```sql
+SELECT
+    COUNT(*) AS total_bronze_rows,
+    COUNT(DISTINCT cik) AS distinct_ciks,
+    COUNT(DISTINCT extract_date) AS distinct_extract_dates,
+    COUNT(DISTINCT json_extract_scalar(json_text, '$.entityName')) AS distinct_entity_names
+FROM financial_analytics_bronze.sec_edgar_companyfacts_raw;
+```
+
+Result on the actual Bronze: 101 rows / 100 distinct CIKs / 2
+distinct extract_dates / 100 distinct entityNames. One CIK had
+been extracted twice on two different dates with identical
+entity_name both times. The naive read — sourcing staging
+directly without DISTINCT — would have shipped 101 satellite
+rows on first load, breaking the 1:1 invariant with hub_company.
+The empirical probe caught the cardinality drift at design time,
+not first-run time. DISTINCT (cik, entity_name) in the model's
+distinct_companies CTE collapses cleanly to 100. Risk 13
+candidate banked in LEARNINGS: every future satellite's
+forward-verify pass must include an empirical cardinality probe
+against actual Bronze, not just function-chain doc-verify
+against authoritative sources.
+
+The SCD-2 change-detection mechanic won't fire on entity_name
+within Project #3's data scope — current Bronze has identical
+entityName across both extract_dates for the duplicate CIK, and
+the S&P 100 roster within a single Phase 1 ingestion run has no
+genuine rename events. The contract is valid for future loads:
+if the same CIK ever appears with a renamed entity_name on a
+later refresh, the source-side hashdiff would differ from the
+latest stored hashdiff, the anti-join would pass the inbound
+row through, and a new SCD-2 row would land with a new
+load_datetime, preserving the prior row for audit lineage.
+
+hashdiff for a single-column payload is SHA-256 over
+COALESCE(entity_name, '^^') directly — no '||' delimiter
+inside (the delimiter defends against multi-column concat
+ambiguity, not present here). The '^^' sentinel still applies
+as project standard defensive shield against Trino's concat
+NULL propagation (Risk 8), even though entity_name is reliably
+populated upstream per the Bronze openx SerDe contract.
+
+### 8.15 Verification surface for sat_company_metadata
+
+`sql/verify/06_phase2_warehouse_sat_company_metadata_verification.sql`
+— 11 CTE PASS/FAIL checks in the same shape as verify/05:
+
+- Checks 1-5 cover the structural contract: sat hash key
+  uniqueness + NOT NULL + length = 64, hashdiff NOT NULL +
+  length = 64.
+- Check 6 is FK closure to hub_company (no orphan parent keys).
+- Check 7 is the composite natural PK (hub_company_hk,
+  load_datetime) uniqueness check — independently confirms the
+  DV2.0 textbook contract that the single-column unique_key
+  enforces at engine level.
+- Check 8 is parent coverage parity — on first load, sat row
+  count = distinct hub_company_hk in sat = hub_company row
+  count = 100 (1:1 cardinality invariant). Risk 13's empirical
+  cardinality probe at the forward-verify pass is the
+  design-time counterpart to this run-time check; together they
+  enforce the 1:1 contract twice over.
+- Checks 9-10 are hash-determinism reproducibility on Apple
+  (cik 0000320193) — recomputes both sat_company_metadata_hk
+  (Risk 10 function chain) and hashdiff (Risk 8 function chain
+  — single-column COALESCE-protected payload, no '||'
+  delimiter) and confirms the stored values match.
+- Check 11 confirms record_source is the constant
+  'sec_edgar.companyfacts' on every row.
+
+11/11 PASS in 2.55 sec; ~few MB scanned. 10/10 schema tests
+PASS in 14.22 sec across the new model. Idempotency proven via
+second dbt run [OK 0 in 27.01s] — the SCD-2 unchanged-payload
+contract held.
+
+Cumulative warehouse-layer verification surface at session 7
+close: 6 hub_company + 6 hub_filing + 10 link_company_filing +
+11 sat_filing_metadata + 10 sat_company_metadata = 43 schema
+tests PASS. 9 verify/03 + 13 verify/04 + 11 verify/05 + 11
+verify/06 = 44 SQL structural checks PASS.
+
 ## 9. Verification surface (per session)
 
 Each dbt session ships with a verification suite parallel to Phase 1's
