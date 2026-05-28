@@ -483,3 +483,343 @@ models:
           'sec_edgar.companyfacts'.
         tests:
           - not_null
+
+  - name: hub_concept
+    description: |
+      Data Vault 2.0 hub for the XBRL canonical concept entity. One row
+      per unique canonical_concept observed in the SEC EDGAR data — the
+      business key. SHA-256 hash key computed via to_hex(sha256(to_utf8(
+      cast(canonical_concept AS varchar)))), stored as hub_concept_hk
+      and referenced by every downstream link (link_filing_concept_period)
+      and future concept-keyed satellite. Insert-only by construction —
+      load_datetime records the first observation of each canonical
+      concept and is immutable on subsequent refreshes (source-side
+      is_incremental filter excludes seen-before hash keys before the
+      engine-level merge). Source = int_sec_edgar__concepts_canonical
+      (the intermediate view that joins int_sec_edgar__concepts to
+      canonical_concepts_dictionary by raw concept_name) — sourcing
+      from the canonical view rather than the seed directly ensures
+      hub_concept holds first-observed canonical concepts in actual
+      data, not enumerated reference lists. Expected first-load row
+      count = 5 (revenue, net_income, assets, liabilities,
+      stockholders_equity per session 8 forward-verify probe 1).
+      Walkthrough: DBT_PIPELINE.md section 8.
+    columns:
+      - name: hub_concept_hk
+        description: |
+          SHA-256 hash of the business key (canonical_concept),
+          hex-encoded. Primary key of the hub by DV2.0 convention;
+          foreign key target from link_filing_concept_period.
+        tests:
+          - not_null
+          - unique
+
+      - name: canonical_concept
+        description: |
+          Canonical XBRL concept name (e.g., 'revenue', 'net_income',
+          'assets', 'liabilities', 'stockholders_equity'). Business
+          key of the hub — the stable identifier downstream Gold marts
+          query against. 4 revenue alias raw tags (Revenues,
+          SalesRevenueNet, RevenueFromContractWithCustomerExcluding/
+          IncludingAssessedTax) collapse to canonical 'revenue' via
+          canonical_concepts_dictionary; other 4 in-scope raw tags
+          identity-map to canonical names.
+        tests:
+          - not_null
+          - unique
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) recording the first observation of this
+          canonical_concept in the warehouse. Set on insert, never
+          updated — DV2.0 audit-lineage contract.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          String identifier of the source system / dataset this hub
+          row was first seen in. Constant 'sec_edgar.companyfacts'.
+        tests:
+          - not_null
+
+  - name: link_filing_concept_period
+    description: |
+      Data Vault 2.0 link associating hub_company (cik) + hub_filing
+      (accession_number) + hub_concept (canonical_concept) with the
+      per-period observation grain. One row per unique (cik,
+      accession_number, canonical_concept, period_start_date,
+      period_end_date, fiscal_year, fiscal_period) tuple observed in
+      the companyfacts JSON. STANDARD link (not non-historized) per
+      LEARNINGS Risk 15, 2026-05-28 — the relationship grain is
+      unique-per-source-event in SEC reporting semantics; restatements
+      come via NEW accession_numbers, not same-accession value drift.
+      Period attributes (period_start_date, period_end_date,
+      fiscal_year, fiscal_period) live as DESCRIPTIVE LINK-LEVEL
+      PAYLOAD on the link rather than on a separate hub_period per
+      LEARNINGS Risk 14, 2026-05-28 — session 8 forward-verify probe 3
+      showed 10,974 distinct period instances (transactional-grain
+      territory, not reference-hub territory). 7-column composite
+      SHA-256 hash key includes both the parent BKs (cik,
+      accession_number, canonical_concept) AND the period payload —
+      without the payload in the hash, two genuinely-distinct
+      observations sharing the same (cik, accn, canonical) but
+      different period instances would collide. '||' delimiter per
+      LEARNINGS Risk 6; COALESCE-to-'^^' sentinel on period_start_date
+      (NULL for balance-sheet instant-period concepts) per Risk 8.
+      DISTINCT at post-canonical natural cardinal tuple per Risk 16
+      (collapses ~5,941 canonical-collapse duplicates from
+      multi-tag-same-period dual-reporting under multiple revenue
+      alias tags). Carries hub_company_hk, hub_filing_hk,
+      hub_concept_hk as FK columns alongside the composite link hash.
+      Insert-only — same source-side is_incremental NOT IN filter
+      pattern as link_company_filing. Expected first-load row count =
+      ~88-95K (probe 2: 87,928 distinct (cik, canonical, period_*)
+      tuples; accession_number refinement at run time). Walkthrough:
+      DBT_PIPELINE.md section 8.
+    columns:
+      - name: link_filing_concept_period_hk
+        description: |
+          SHA-256 hash of the 7-column composite (cik || '||' ||
+          accession_number || '||' || canonical_concept || '||' ||
+          COALESCE(period_start_date, '^^') || '||' || period_end_date
+          || '||' || COALESCE(fiscal_year, '^^') || '||' ||
+          COALESCE(fiscal_period, '^^')), hex-encoded. Primary key of
+          the link.
+        tests:
+          - not_null
+          - unique
+
+      - name: hub_company_hk
+        description: Foreign key into hub_company. SHA-256 hash of cik.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('hub_company')
+                field: hub_company_hk
+
+      - name: hub_filing_hk
+        description: Foreign key into hub_filing. SHA-256 hash of accession_number.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('hub_filing')
+                field: hub_filing_hk
+
+      - name: hub_concept_hk
+        description: Foreign key into hub_concept. SHA-256 hash of canonical_concept.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('hub_concept')
+                field: hub_concept_hk
+
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. Carried on the
+          link alongside the FK hash so downstream consumers can read
+          the link without joining back to hub_company.
+        tests:
+          - not_null
+
+      - name: accession_number
+        description: |
+          18-character SEC EDGAR accession number. Carried on the link
+          alongside the FK hash so downstream consumers can read the
+          link without joining back to hub_filing.
+        tests:
+          - not_null
+
+      - name: canonical_concept
+        description: |
+          Canonical XBRL concept name. Carried on the link alongside
+          the FK hash so downstream consumers can read the link
+          without joining back to hub_concept.
+        tests:
+          - not_null
+
+      - name: period_start_date
+        description: |
+          Calendar date the reporting period begins. Populated for flow
+          concepts (income_statement: revenue, net_income); NULL for
+          balance-sheet instant-period concepts (assets, liabilities,
+          stockholders_equity — SEC EDGAR omits $.start for instants).
+          NO not_null test — NULL is part of the contract.
+
+      - name: period_end_date
+        description: |
+          Calendar date the reported value applies to. Required for
+          every period instance in the SEC EDGAR companyfacts JSON.
+        tests:
+          - not_null
+
+      - name: fiscal_year
+        description: |
+          Fiscal year as reported by the company (may not match
+          calendar year). Occasionally NULL in very old or amended
+          filings — NO not_null test for defensive tolerance.
+
+      - name: fiscal_period
+        description: |
+          Fiscal period code: FY (full year), Q1-Q3 (quarters), Q4
+          implied from FY minus Q1+Q2+Q3 by convention. Occasionally
+          NULL in very old or amended filings — NO not_null test.
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) recording the first observation of this
+          (cik, accession_number, canonical_concept, period_*) tuple
+          in the warehouse. Set on insert, never updated.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          String identifier of the source system / dataset this link
+          row was first seen in. Constant 'sec_edgar.companyfacts'.
+        tests:
+          - not_null
+
+  - name: sat_concept_value
+    description: |
+      Data Vault 2.0 satellite for the XBRL fact value. Parent =
+      link_filing_concept_period (the 3-way standard link). Carries 2
+      payload attributes: value (actual XBRL fact value, DECIMAL(28,2))
+      and unit (always 'USD' within current scope). 1:1 cardinality
+      with the link parent on first load. THIS IS THE MODEL holding
+      the actual numerical financial data — every downstream Gold mart
+      in Phase 4 joins through link_filing_concept_period to
+      sat_concept_value to access fact values. SCD-2 insert-on-change
+      semantics — restatements typically come via NEW accession_numbers
+      (10-K/A amends 10-K) which produce NEW link rows naturally; the
+      same-accession SCD-2 anti-join fires only on the rare case where
+      the SAME accession's facts get re-extracted with a different
+      value across extract_dates. Value disagreement collapse via
+      MIN(value) at source-side (Risk 16 sub-decision, 2026-05-28) —
+      when canonical-collapse produces multiple rows for the same
+      (cik, accession, canonical, period) tuple with different reported
+      values from multi-tag dual-reporting, MIN is deterministic and
+      audit-traceable; biases toward the conservative revenue
+      measurement (analyst convention). Single-column unique_key =
+      sat_concept_value_hk; composite natural PK
+      (link_filing_concept_period_hk, load_datetime) enforced at test
+      time via dbt_utils.unique_combination_of_columns. hashdiff is
+      SHA-256 over the COALESCE-sentinel-protected concat of value +
+      unit per Risk 8. Materialized as Iceberg via merge incremental
+      strategy; on_schema_change=ignore MANDATORY per Risk 2.
+      Walkthrough: DBT_PIPELINE.md section 8.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - link_filing_concept_period_hk
+              - load_datetime
+    columns:
+      - name: sat_concept_value_hk
+        description: |
+          SHA-256 hash of (link_filing_concept_period_hk || '||' ||
+          load_datetime), hex-encoded. Single-column surrogate primary
+          key for the satellite — matches the hub/link/sat single-hash-
+          PK surface.
+        tests:
+          - not_null
+          - unique
+
+      - name: hashdiff
+        description: |
+          SHA-256 hash over the COALESCE-sentinel-protected concat of
+          the 2 payload columns in fixed order (value, unit). Same
+          hashdiff across loads = unchanged payload = no new SCD-2
+          row. Different hashdiff = payload changed = new SCD-2 row.
+        tests:
+          - not_null
+
+      - name: link_filing_concept_period_hk
+        description: |
+          Foreign key into link_filing_concept_period. 7-column
+          composite SHA-256 hash chain identical to
+          link_filing_concept_period.link_filing_concept_period_hk so
+          FK joins remain valid by construction.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('link_filing_concept_period')
+                field: link_filing_concept_period_hk
+
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. Carried on the
+          satellite alongside the parent FK hash.
+        tests:
+          - not_null
+
+      - name: accession_number
+        description: |
+          18-character SEC EDGAR accession number. Carried on the
+          satellite alongside the parent FK hash.
+        tests:
+          - not_null
+
+      - name: canonical_concept
+        description: |
+          Canonical XBRL concept name. Carried on the satellite
+          alongside the parent FK hash.
+        tests:
+          - not_null
+
+      - name: period_start_date
+        description: |
+          Calendar date the reporting period begins. NULL for
+          balance-sheet instant-period concepts. NO not_null test.
+
+      - name: period_end_date
+        description: |
+          Calendar date the reported value applies to. Required.
+        tests:
+          - not_null
+
+      - name: fiscal_year
+        description: |
+          Fiscal year as reported by the company. Occasionally NULL —
+          NO not_null test.
+
+      - name: fiscal_period
+        description: |
+          Fiscal period code. Occasionally NULL — NO not_null test.
+
+      - name: value
+        description: |
+          Actual XBRL fact value, DECIMAL(28,2). Payload attribute —
+          the numerical financial data. Source filter excludes NULL
+          values upstream, so not_null is a safe contract here. Value
+          disagreement collapse via MIN at source-side per Risk 16
+          sub-decision.
+        tests:
+          - not_null
+
+      - name: unit
+        description: |
+          Unit of the fact value. Constant 'USD' within current scope
+          (staging filters to USD-only). Payload attribute.
+        tests:
+          - not_null
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) recording the load batch this satellite row
+          landed in. Part of the natural composite PK with
+          link_filing_concept_period_hk. Set on insert, never updated.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          String identifier of the source system / dataset this
+          satellite row was first seen in. Constant
+          'sec_edgar.companyfacts'.
+        tests:
+          - not_null

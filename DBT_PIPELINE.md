@@ -964,6 +964,204 @@ close: 6 hub_company + 6 hub_filing + 10 link_company_filing +
 tests PASS. 9 verify/03 + 13 verify/04 + 11 verify/05 + 11
 verify/06 = 44 SQL structural checks PASS.
 
+### 8.16 Third hub: hub_concept (Phase 2 session 8)
+
+`dbt/models/warehouse/hub_concept.sql` — third DV2.0 hub.
+Business key = canonical_concept (the canonical XBRL concept name
+after dictionary collapse). 5 rows: revenue, net_income, assets,
+liabilities, stockholders_equity. The 4 revenue alias raw tags
+(Revenues, SalesRevenueNet, RevenueFromContractWithCustomer-
+Excluding/IncludingAssessedTax) all collapse to canonical
+'revenue' via the canonical_concepts_dictionary seed; the other 4
+in-scope raw tags identity-map to canonical names.
+
+Source = int_sec_edgar__concepts_canonical (the intermediate view
+that joins int_sec_edgar__concepts to the seed by raw concept_name)
+rather than the seed directly. DV2.0 hubs hold first-observed
+business keys in actual data, not enumerated reference lists — a
+canonical concept defined in the seed but never reported by any
+S&P 100 company shouldn't appear in hub_concept. Inner-joining
+seed → actual data via the canonical view is exactly this filter.
+
+Hash chain: to_hex(sha256(to_utf8(CAST(canonical_concept AS varchar))))
+— identical single-key chain as hub_company / hub_filing (Risk 4,
+2026-05-28). 5 sixty-four-char SHA-256 hashes at S&P 100 scale is
+a trivially-small reference hub — but the project-standard chain
+is still applied for lineage consistency. Insert-only via the
+source-side NOT IN filter pattern matching the other two hubs.
+
+### 8.17 Second link: link_filing_concept_period (Phase 2 session 8)
+
+`dbt/models/warehouse/link_filing_concept_period.sql` — second
+DV2.0 link, **3-way standard link** associating hub_company (cik)
++ hub_filing (accession_number) + hub_concept (canonical_concept)
+with the per-period observation grain. 89,821 rows on first load.
+One row per unique (cik, accession_number, canonical_concept,
+period_start_date, period_end_date, fiscal_year, fiscal_period)
+tuple observed in the companyfacts JSON.
+
+**Architectural call locked at the session 8 forward-verify pass.**
+This was the biggest design decision in Phase 2 so far. Two
+candidate shapes surfaced at kickoff: (a) hub_period +
+link_filing_period split (textbook DV2.0 temporal-grain
+decomposition) vs (b) period attributes baked into sat_concept_value
+as multi-active satellite payload. The forward-verify pass refined
+Option A's intent via doc-verify against scalefree.com (multi-
+temporality + non-historized link patterns), surfacing that the
+canonical DV2.0 idiom for transactional observation data has
+period attributes as descriptive link-level payload rather than
+a separate hub_period. Empirical probe 3 then confirmed
+empirically: 10,974 distinct period instances is transactional-
+grain territory (a true reference-style fiscal-calendar hub
+lands at ~40-50 rows), not reference-hub territory. hub_period
+DEFERRED indefinitely. LEARNINGS Risk 14 banked.
+
+Empirical probe 4 then surfaced the link-class call: 9,335 (cik,
+canonical_concept, period_end_date) groups had value disagreement
+across observations (~31% of 29,815 groups) — mix of period-grain
+ambiguity (3-month Q3 vs 9-month YTD sharing end date), multi-
+filing same-period reporting, canonical-collapse double-projection,
+and only a subset of true restatements. Critically: adding
+accession_number to the grain made each tuple unique-per-filing.
+**Standard link, not non-historized link** — restatements appear
+as NEW link rows because they carry NEW accession_numbers; the
+non-historized-link idiom is for relationship triples that repeat
+with different transaction values (sales-per-customer-store-product
+pattern), which SEC XBRL doesn't fit. LEARNINGS Risk 15 banked.
+
+**Cardinality probe artefact.** Phil ran the four-aggregate
+signature against int_sec_edgar__concepts_canonical at the
+forward-verify pass (Risk 13 carry-forward, 2026-05-28). The
+full probe SQL + observed results live in
+sql/diagnostic/01_phase2_session8_sat_concept_value_cardinality_probes.sql
+as a versioned design-time artefact:
+
+- Probe 1: 5 distinct canonical_concepts → hub_concept row count locked
+- Probe 2: 93,869 total vs 87,928 distinct (cik, canonical, period_*)
+  tuples → 5,941-row canonical-collapse gap → DISTINCT + GROUP BY
+  collapse strategy locked
+- Probe 3: 10,974 distinct period instances → hub_period deferred
+- Probe 4: 9,335 value-disagreement groups → standard link locked,
+  MIN(value) tie-breaker locked
+
+**Composite hash construction.** 7-column SHA-256 composite
+including BOTH the parent BKs (cik, accession_number,
+canonical_concept) AND the period payload (period_start_date,
+period_end_date, fiscal_year, fiscal_period). Without the period
+payload in the hash, two genuinely-distinct observations sharing
+the same (cik, accn, canonical) but different period instances
+would collide to the same link hash. '||' delimiter per Risk 6;
+COALESCE-to-'^^' sentinel on period_start_date (NULL for
+balance-sheet instant-period concepts) per Risk 8. 3 FK hash
+columns (hub_company_hk, hub_filing_hk, hub_concept_hk) computed
+via the same single-key chains as their parent hubs so FK joins
+are valid by construction.
+
+**DISTINCT discipline at post-canonical grain.** Per Risk 16
+(banked at this forward-verify pass). The canonical-concept
+dictionary collapses 4 revenue alias raw tags into canonical
+'revenue'. When a single filing reports the SAME period under
+multiple revenue alias tags (common during ASC 606 transition
+years), the post-join layer produces duplicate-canonical rows.
+DISTINCT applied at the natural cardinal tuple BEFORE composite-
+hash computation collapses these to one link row per genuine
+observation. Same DISTINCT discipline as Risk 11 (pre-collapse
+on UNNEST repetition) but extended to the post-collapse layer.
+
+### 8.18 Third satellite: sat_concept_value (Phase 2 session 8)
+
+`dbt/models/warehouse/sat_concept_value.sql` — third DV2.0
+satellite. Parent = link_filing_concept_period. 2 payload
+attributes: value (DECIMAL(28,2), the actual XBRL fact value) and
+unit ('USD' within current scope). 1:1 cardinality with the link
+parent on first load — 89,821 rows = link row count.
+
+**THIS IS THE MODEL holding the actual numerical SEC EDGAR
+financial data.** Every downstream Gold mart in Phase 4
+(mart_pl_trend, mart_peer_benchmark, mart_financial_health,
+mart_growth_forecast) joins through link_filing_concept_period
+to sat_concept_value for fact values. Apple's $383.3B FY2023
+revenue, Microsoft's quarterly net income, S&P 100 balance-sheet
+totals — all live here.
+
+**Inherits the satellite pattern locked at sessions 6 + 7.** SCD-2
+NOT EXISTS anti-join on latest-hashdiff-per-parent (Risk 9),
+COALESCE-sentinel hashdiff with '^^' sentinel + '||' delimiter
+(Risk 8), dedicated single-column sat_concept_value_hk over
+(link_filing_concept_period_hk || '||' || load_datetime) with
+composite natural PK enforced at test time via
+dbt_utils.unique_combination_of_columns (Risk 10). No new sat
+mechanic introduced — the structural innovation of session 8 is
+on the link side (3-way standard link + period-as-payload), the
+sat reuses the established session-6 shape.
+
+**Value disagreement collapse via MIN at source-side** (Risk 16
+sub-decision, 2026-05-28). When canonical-collapse produces
+multiple rows for the same (cik, accession, canonical, period)
+tuple with different reported values from multi-tag dual-reporting
+(the 5,941-row gap in probe 2), MIN(value) is the deterministic
+tie-breaker. MIN biases toward the conservative revenue
+measurement (e.g., excluding-assessed-tax over including-) which
+aligns with analyst convention of "smallest defensible number"
+for revenue. Documented in the model body rather than swept
+under DISTINCT — DISTINCT would non-deterministically pick one
+row; GROUP BY + MIN(value) is auditable.
+
+**SCD-2 mechanic on this data.** Restatements typically come via
+NEW accession_numbers (10-K/A amends 10-K) — those produce NEW
+link rows naturally because the composite link hash includes
+accession_number. The same-accession SCD-2 anti-join fires only
+on the rare case where the SAME accession's facts get re-extracted
+with a different value across extract_dates. Within current
+Bronze the 2-extract-dates / 1-duplicate-CIK case from session 7
+gives the mechanic exactly 1 chance to fire on first load (and
+only if that duplicate-CIK's facts changed between extracts —
+which probe 4 + idempotency NO-OP together suggest they didn't).
+Contract valid for future loads regardless.
+
+### 8.19 Verification surface for hub_concept + link_filing_concept_period + sat_concept_value
+
+Three new verify files per the established per-model pattern:
+
+- `sql/verify/07_phase2_warehouse_hub_concept_verification.sql` —
+  8 CTE PASS/FAIL checks: hash unique + not_null + length 64, BK
+  unique + not_null, source-coverage parity (5 = 5 distinct
+  canonicals from intermediate view), hash determinism on
+  'revenue' sample, record_source constant. 8/8 PASS in 1.73 sec.
+- `sql/verify/08_phase2_warehouse_link_filing_concept_period_verification.sql`
+  — 12 CTE PASS/FAIL checks: link hash unique + not_null + length
+  64, 3 FK closures (company, filing, concept), 7-column composite
+  natural grain uniqueness, period_end_date + 3 BKs not_null,
+  link composite hash determinism on Apple sample, FK
+  hub_company_hk determinism on Apple, record_source constant.
+  12/12 PASS in 3.77 sec.
+- `sql/verify/09_phase2_warehouse_sat_concept_value_verification.sql`
+  — 12 CTE PASS/FAIL checks: sat hash unique + not_null + length
+  64, hashdiff not_null + length 64, FK closure to link, composite
+  natural PK uniqueness, parent coverage parity (89,821 = 89,821
+  — 1:1 invariant guard), value not_null, sat hash + hashdiff
+  determinism on Apple sample, record_source constant. 12/12 PASS
+  in 2.20 sec.
+
+**Idempotency proven.** Second dbt run --select hub_concept
+link_filing_concept_period sat_concept_value returned [OK 0] on
+all three models in 37.56 sec — NOT IN filter excluded 5 + 89,821
+seen hash keys; NOT EXISTS anti-join excluded 89,821 inbound rows
+whose hashdiff matched the latest stored hashdiff.
+
+**Cumulative warehouse-layer verification surface at session 8
+close:** 5 hubs (hub_company + hub_filing + hub_concept) + 2 links
+(link_company_filing + link_filing_concept_period) + 3 sats
+(sat_filing_metadata + sat_company_metadata + sat_concept_value)
+= **77 dbt schema tests PASS** (43 cumulative through session 7
++ 34 new), **76 SQL structural verify checks PASS** (44 cumulative
+through session 7 + 32 new).
+
+The vault now holds the complete observational raw vault for the
+Phase 4 Gold marts: every (company, filing, concept, period) fact
+observation is in sat_concept_value, navigable via the FK chain
+through link_filing_concept_period to the three hubs.
+
 ## 9. Verification surface (per session)
 
 Each dbt session ships with a verification suite parallel to Phase 1's
