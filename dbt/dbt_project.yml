@@ -54,21 +54,57 @@ clean-targets:
 # UnusedResourceConfigPath warning and are removed until the matching
 # models land. Re-added at the session that introduces each layer:
 #
-# staging — view: cheap, no S3 writes, parses Bronze JSON on every read.
-#   ACTIVE: Phase 2 session 1 onwards.
-# intermediate — view: cleaning + XBRL canonical-concept reconciliation.
-#   ACTIVE: Phase 2 session 2 onwards.
+# staging — view: cheap, no S3 writes, 1:1 pass-throughs over Bronze.
+#   Trivial transforms don't justify materialization. ACTIVE: Phase 2
+#   session 1 onwards.
+# intermediate — iceberg table: cleaning + XBRL canonical-concept
+#   reconciliation. Materialized as Iceberg/Parquet so downstream queries
+#   (schema tests, verify suite, warehouse-layer consumers) scan compact
+#   columnar files instead of re-parsing the Bronze raw JSON via the view
+#   chain. Also bypasses the Bronze cik partition projection type=injected
+#   constraint that fires when schema tests scan without a static
+#   cik = '<value>' filter. ACTIVE as Iceberg: Phase 2 session 3 onwards
+#   (was view in session 2; flipped after test surface revealed the
+#   partition-projection-vs-test pattern conflict). See LEARNINGS entry
+#   "Bronze cik partition projection type=injected blocks schema-test
+#   scans" for the diagnosis loop.
 # warehouse — iceberg table: Data Vault 2.0 hubs/links/satellites need ACID
 #   merge for SCD-2 satellite history (only available with Iceberg).
 #   TO ADD: Phase 2 session 3+ when first hub/link/satellite lands.
 # marts — iceberg table: Gold marts persisted for Power BI consumption.
 #   TO ADD: Phase 4 when first mart lands.
 #
-# Iceberg format_version 2 maintains compatibility between tables created
-# by Athena (Trino) and any future tables created by Spark or other engines.
+# Iceberg format version: Athena creates v2 tables by default — verified
+# 2026-05-28 against docs.aws.amazon.com/athena/latest/ug/querying-iceberg-creating-tables.html
+# ("Athena creates Iceberg v2 tables"). No table_properties.format_version
+# setting is needed; in fact, format_version is NOT in Athena's predefined
+# allowlist of accepted Iceberg table properties (allowlist: format,
+# write_compression, optimize_rewrite_*, vacuum_*) — setting it explicitly
+# triggers InvalidRequestException "Table properties [format_version] are
+# not supported." The dbt-athena docs example recommending format_version=2
+# is stale relative to current Athena engine behavior; banked in LEARNINGS.
 models:
   financial_analytics:
     staging:
       +materialized: view
     intermediate:
-      +materialized: view
+      +materialized: table
+      +table_type: iceberg
+      +format: parquet
+
+# Seed defaults — version-controlled reference CSVs under seeds/.
+# Phase 2 session 3 onwards. Materializes as Parquet on S3 via the
+# dbt-athena seed pipeline (default; seed_by_insert=False per
+# docs.getdbt.com/reference/resource-configs/athena-configs). Tiny seeds
+# (single-digit MB) like the canonical_concepts_dictionary have no
+# meaningful S3 footprint. column_types lock identifier types as varchar
+# rather than dbt's default string inference — prevents downstream join
+# surprises when the seed schema evolves.
+seeds:
+  financial_analytics:
+    +quote_columns: false
+    canonical_concepts_dictionary:
+      +column_types:
+        concept_name: varchar(128)
+        canonical_concept: varchar(64)
+        business_area: varchar(32)

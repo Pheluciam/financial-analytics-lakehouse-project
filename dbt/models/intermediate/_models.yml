@@ -11,11 +11,13 @@ models:
     description: |
       Long-format XBRL concept panel extracted from the SEC EDGAR
       companyfacts raw JSON. One row per (cik, concept_name, period) triple.
-      Scope this session: 5 universally-reported concepts across the S&P 100
-      (Revenues, NetIncomeLoss, Assets, Liabilities, StockholdersEquity),
-      USD unit only. Canonical-concept reconciliation (collapsing
-      Revenues / SalesRevenueNet / Revenue → "revenue") is the NEXT
-      intermediate model. Materialized as a view.
+      Scope: 8 in-scope XBRL tag names — 4 revenue aliases (Revenues,
+      SalesRevenueNet, RevenueFromContractWithCustomerExcludingAssessedTax,
+      RevenueFromContractWithCustomerIncludingAssessedTax) plus NetIncomeLoss,
+      Assets, Liabilities, StockholdersEquity. USD unit only. The revenue
+      alias collapse to canonical 'revenue' happens in
+      int_sec_edgar__concepts_canonical via the canonical_concepts_dictionary
+      seed. Materialized as a view.
     columns:
       - name: cik
         description: |
@@ -34,13 +36,17 @@ models:
       - name: concept_name
         description: |
           Raw XBRL concept name as reported under facts.us-gaap. One of
-          the 5 in the intermediate model's concept list this session.
+          the 8 in the intermediate model's concept list — 4 revenue
+          aliases plus the 4 single-canonical concepts.
         tests:
           - not_null
           - accepted_values:
               arguments:
                 values:
                   - 'Revenues'
+                  - 'SalesRevenueNet'
+                  - 'RevenueFromContractWithCustomerExcludingAssessedTax'
+                  - 'RevenueFromContractWithCustomerIncludingAssessedTax'
                   - 'NetIncomeLoss'
                   - 'Assets'
                   - 'Liabilities'
@@ -56,6 +62,13 @@ models:
           - accepted_values:
               arguments:
                 values: ['USD']
+
+      - name: period_start_date
+        description: |
+          Calendar date the reporting period begins. Populated for flow
+          concepts (income statement, cash flow). NULL for balance-sheet
+          point-in-time concepts (Assets, Liabilities, StockholdersEquity)
+          because SEC EDGAR omits start for instant-period facts. DATE.
 
       - name: period_end_date
         description: |
@@ -87,3 +100,98 @@ models:
           ~10^26, comfortably above any S&P 100 company's balance-sheet
           scale. TRY_CAST — NULL when the source JSON's val field
           cannot be parsed as numeric.
+
+  - name: int_sec_edgar__concepts_canonical
+    description: |
+      Canonical-concept-enriched XBRL panel. One row per (cik, concept_name,
+      period) triple — same grain as int_sec_edgar__concepts but joined to
+      the canonical_concepts_dictionary seed so every row carries the
+      canonical_concept name and business_area classification. INNER JOIN
+      to the seed by design — any raw concept_name not in the dictionary
+      is excluded from the output. This is the surface downstream
+      warehouse-layer satellites and Gold marts consume. Materialized as
+      a view.
+    columns:
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. Inherited from
+          int_sec_edgar__concepts.
+        tests:
+          - not_null
+
+      - name: extract_date
+        description: |
+          DATE the extract ran. Inherited from int_sec_edgar__concepts.
+        tests:
+          - not_null
+
+      - name: concept_name
+        description: |
+          Raw XBRL tag name. Joined from int_sec_edgar__concepts. Useful
+          for audit trail back to the source filing — downstream queries
+          should group/aggregate by canonical_concept, not concept_name.
+        tests:
+          - not_null
+
+      - name: canonical_concept
+        description: |
+          Project-canonical concept name (snake_case). One of the values
+          present in the canonical_concepts_dictionary seed. Stable across
+          XBRL alias renames at the source — downstream models, Gold marts,
+          and Power BI all reference this column.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'revenue'
+                  - 'net_income'
+                  - 'assets'
+                  - 'liabilities'
+                  - 'stockholders_equity'
+
+      - name: business_area
+        description: |
+          Financial statement classification — income_statement,
+          balance_sheet, or cash_flow. Drives Phase 4 Gold mart routing.
+          Joined from the seed.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'income_statement'
+                  - 'balance_sheet'
+                  - 'cash_flow'
+
+      - name: unit
+        description: |
+          Reporting unit. USD only this session. Inherited from
+          int_sec_edgar__concepts.
+        tests:
+          - not_null
+
+      - name: period_start_date
+        description: |
+          Calendar date the reporting period begins. NULL for
+          balance-sheet point-in-time facts. DATE.
+
+      - name: period_end_date
+        description: |
+          Calendar date the reported value applies to. DATE.
+
+      - name: period_form_type
+        description: |
+          SEC form type — 10-K, 10-Q, etc.
+
+      - name: period_fiscal_year
+        description: |
+          Fiscal year as reported by the company. INTEGER.
+
+      - name: period_fiscal_period
+        description: |
+          Fiscal period code — FY, Q1, Q2, Q3.
+
+      - name: value
+        description: |
+          Reported value for the (concept, period) pair. DECIMAL(28,2).

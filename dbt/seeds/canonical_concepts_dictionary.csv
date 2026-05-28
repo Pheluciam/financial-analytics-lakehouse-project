@@ -1,0 +1,9 @@
+concept_name,canonical_concept,business_area
+Revenues,revenue,income_statement
+SalesRevenueNet,revenue,income_statement
+RevenueFromContractWithCustomerExcludingAssessedTax,revenue,income_statement
+RevenueFromContractWithCustomerIncludingAssessedTax,revenue,income_statement
+NetIncomeLoss,net_income,income_statement
+Assets,assets,balance_sheet
+Liabilities,liabilities,balance_sheet
+StockholdersEquity,stockholders_equity,balance_sheet

@@ -1,0 +1,66 @@
+# Seed contracts — reference data shipped as version-controlled CSV.
+#
+# Per-seed column descriptions + schema tests. Schema shape verified
+# against docs.getdbt.com/reference/seed-properties (last-updated 2026-04-03)
+# pre-write per the verify-then-write rule banked in LEARNINGS after the
+# Phase 2 session 2 _models.yml miss.
+
+version: 2
+
+seeds:
+  - name: canonical_concepts_dictionary
+    description: |
+      Maps heterogeneous XBRL US-GAAP concept tag names to canonical
+      concept names so downstream consumers don't need to know about
+      the alias zoo. One row per (concept_name) — primary key.
+
+      Authoritative source for the revenue alias set: XBRL US Data Quality
+      Committee Revenue Guidance (https://xbrl.us/data-rule/guid-revenue/,
+      approved 2018-10-10, last updated 2020-08-01) and the FASB Taxonomy
+      Implementation Guide "Revenue from Contracts with Customers" (2020).
+      The four S&P 100-relevant revenue tags map to the canonical concept
+      'revenue': legacy Revenues (allowed for mixed ASC 606 + non-606
+      filers), RevenueFromContractWithCustomerExcludingAssessedTax (most
+      common for pure ASC 606 filers without assessed tax), the same With
+      assessed-tax variant, and the pre-ASC 606 SalesRevenueNet (still
+      surfaced by filings predating ASC 606 adoption).
+
+      The other 4 in-scope concepts (NetIncomeLoss, Assets, Liabilities,
+      StockholdersEquity) are single canonical tags in US-GAAP for S&P 100
+      filings — identity mappings here. Future additions (e.g. operating
+      cash flow aliases, EBITDA-component aliases) extend by adding rows;
+      no model changes required.
+
+      business_area classifies each canonical into the financial statement
+      it sits on — drives the Phase 4 Gold mart split (mart_pl_trend for
+      income_statement, mart_financial_health for balance_sheet).
+    columns:
+      - name: concept_name
+        description: |
+          Raw XBRL US-GAAP tag name as reported under
+          facts.us-gaap.<concept_name>. Primary key for this seed. Case
+          and spelling must match the SEC XBRL element name exactly —
+          the intermediate model joins on this column.
+        tests:
+          - not_null
+          - unique
+
+      - name: canonical_concept
+        description: |
+          Project-canonical concept name. snake_case. Stable across
+          alias additions — downstream models reference this column.
+        tests:
+          - not_null
+
+      - name: business_area
+        description: |
+          Financial statement classification — income_statement,
+          balance_sheet, or cash_flow. Drives Phase 4 Gold mart routing.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - 'income_statement'
+                  - 'balance_sheet'
+                  - 'cash_flow'

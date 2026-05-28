@@ -59,10 +59,21 @@ TBLPROPERTIES (
     'projection.extract_date.type'   = 'date',
     'projection.extract_date.range'  = '2026-05-24,NOW',
     'projection.extract_date.format' = 'yyyy-MM-dd',
-    -- cik values are "injected" — Athena learns valid values from the
-    -- WHERE clause at query time; queries against this table MUST filter
-    -- on cik or partition pruning fails
-    'projection.cik.type'            = 'injected',
+    -- cik values are an enumerated static set — Athena enumerates the
+    -- valid partition values from the list below at query time without
+    -- needing a WHERE cik = 'X' filter. Switched from type=injected
+    -- (Phase 1 session 3 default) to type=enum at Phase 2 session 3 after
+    -- the type=injected constraint blocked dbt CTAS materialization (full
+    -- scans without static cik filters fail under injected mode). The
+    -- 100 CIKs below are the iShares OEF NPORT-P S&P 100 roster as of
+    -- 2025-12-31 (per scripts/extract_sec_edgar.py source-of-record).
+    -- S&P 100 turnover requires updating this list AND the equivalent
+    -- in 02_create_bronze_raw_text_table.sql, then DROP+CREATE both
+    -- Glue Catalog tables. AWS Athena partition-projection-supported-types
+    -- docs recommend enum for "a few dozen" values — 100 is on the higher
+    -- end but within practical bounds for our query patterns.
+    'projection.cik.type'            = 'enum',
+    'projection.cik.values'          = '0000001800,0000002488,0000004962,0000005272,0000012927,0000014272,0000018230,0000019617,0000021344,0000021665,0000027419,0000032604,0000034088,0000036104,0000040533,0000040545,0000050863,0000051143,0000059478,0000060667,0000063908,0000064803,0000066740,0000070858,0000072971,0000077476,0000078003,0000080424,0000092122,0000093410,0000097476,0000097745,0000100885,0000101829,0000104169,0000200406,0000310158,0000313616,0000315189,0000316709,0000318154,0000320187,0000320193,0000354950,0000731766,0000732712,0000732717,0000753308,0000764180,0000773840,0000789019,0000796343,0000804328,0000829224,0000831001,0000858877,0000882095,0000886982,0000895421,0000896878,0000909832,0000927628,0000936468,0001018724,0001035267,0001045810,0001048911,0001053507,0001063761,0001065280,0001067983,0001075531,0001090727,0001099219,0001103982,0001108524,0001141391,0001163165,0001166691,0001283699,0001318605,0001321655,0001326160,0001326801,0001341439,0001373715,0001390777,0001403161,0001413329,0001467373,0001467858,0001543151,0001551152,0001613103,0001633917,0001652044,0001707925,0001730168,0001744489,0002012383',
     -- Template for reconstructing the S3 path from partition values
     'storage.location.template'      = 's3://phil-financial-analytics-lakehouse/zone=bronze/extract_date=${extract_date}/cik=${cik}/'
 );

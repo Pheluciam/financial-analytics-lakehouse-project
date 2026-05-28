@@ -1,17 +1,21 @@
 -- Intermediate model: SEC EDGAR XBRL concept extraction (long-format).
 --
 -- Phase 2 session 2 deliverable — first intermediate model. Pulls a fixed
--- shortlist of canonical-ish XBRL concepts out of the heterogeneous
--- facts.us-gaap nested structure in the Bronze raw-text JSON. One row per
--- (cik, concept_name, period) triple. Output is the long-format concept
--- panel that downstream models (canonical-concept reconciliation in a later
--- intermediate, then Data Vault 2.0 satellites in the warehouse layer)
--- build on top of.
+-- list of XBRL concept tag names out of the heterogeneous facts.us-gaap
+-- nested structure in the Bronze raw-text JSON. One row per (cik,
+-- concept_name, period) triple. Output is the long-format raw concept panel
+-- that the canonical-concept reconciliation model (int_sec_edgar__concepts_canonical)
+-- builds on top of, and which the Data Vault 2.0 satellites in the warehouse
+-- layer ultimately consume.
 --
--- Scope this session: 5 universally-reported concepts across the S&P 100,
--- USD unit only. The canonical-concept reconciliation step (collapsing
--- Revenues / SalesRevenueNet / Revenue → "revenue") is the NEXT intermediate
--- model — see DBT_PIPELINE.md section 7 for the full pipeline plan.
+-- Scope: 8 in-scope XBRL tag names, USD unit only. The 4 revenue tag variants
+-- (Revenues, SalesRevenueNet, RevenueFromContractWithCustomerExcludingAssessedTax,
+-- RevenueFromContractWithCustomerIncludingAssessedTax) all surface here as
+-- distinct rows; the canonical-concept reconciliation model collapses them
+-- to a single canonical 'revenue' name via the canonical_concepts_dictionary
+-- seed. The other 4 concepts (NetIncomeLoss, Assets, Liabilities,
+-- StockholdersEquity) are single canonical tags in US-GAAP for the S&P 100 —
+-- they pass through to canonical names as identity mappings.
 --
 -- Pattern: Jinja for-loop UNION ALL over the concept list, with CROSS JOIN
 -- UNNEST on json_extract → ARRAY(JSON) to flatten each concept's per-period
@@ -27,6 +31,9 @@
 
 {% set concepts = [
     'Revenues',
+    'SalesRevenueNet',
+    'RevenueFromContractWithCustomerExcludingAssessedTax',
+    'RevenueFromContractWithCustomerIncludingAssessedTax',
     'NetIncomeLoss',
     'Assets',
     'Liabilities',
@@ -48,6 +55,13 @@ extracted AS (
         extract_date,
         '{{ concept }}' AS concept_name,
         'USD' AS unit,
+        -- Period start date — the calendar date the period begins.
+        -- Populated for flow concepts (income statement, cash flow);
+        -- NULL for balance-sheet point-in-time concepts (Assets,
+        -- Liabilities, StockholdersEquity) because SEC EDGAR omits
+        -- start for instant-period facts. TRY_CAST handles both cases.
+        TRY_CAST(json_extract_scalar(period_json, '$.start') AS DATE)
+            AS period_start_date,
         -- Period end date — the calendar date the reported value applies to
         TRY_CAST(json_extract_scalar(period_json, '$.end') AS DATE)
             AS period_end_date,

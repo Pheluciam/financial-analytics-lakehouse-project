@@ -243,38 +243,130 @@ The model uses three composed patterns:
   that don't report a given concept naturally contribute zero rows (UNNEST
   of NULL returns no rows per Athena docs).
 
-### 7.5 Known limitations + next intermediate
+### 7.5 Session 2 limitations — both addressed in session 3
 
-Two known limitations surfaced at first-run verification, both deferred
-to the next intermediate model:
+Two limitations surfaced at session 2 first-run verification. Both shipped
+as session 3 deliverables.
 
-- **Concept aliasing not yet collapsed.** Apple's Revenues query returned
-  only 11 rows, all under fiscal year 2018, because Apple switched from
-  the bare `Revenues` XBRL tag to `RevenueFromContractWithCustomerExcludingAssessedTax`
-  on ASC 606 adoption (FY2019+). The next intermediate model
-  (canonical-concept reconciliation) will UNION across alias concept names
-  and emit a single canonical concept name (e.g. `revenue`) so downstream
-  consumers don't need to know about the alias zoo.
-- **No `period_start_date` column.** Without start date alongside end date,
-  consumers can't visually distinguish annual periods from quarterly periods
-  that share an end-of-fiscal-year date. Schema additions for the next
-  intermediate model: `period_start_date` plus a computed `period_length_days`
-  column for downstream slicing.
+- **Concept aliasing collapsed via seed-driven canonical reconciliation.**
+  Apple's bare `Revenues` query returned rows only for FY2016-FY2018
+  because Apple switched to `RevenueFromContractWithCustomerExcludingAssessedTax`
+  on ASC 606 adoption in FY2019. Session 3's `int_sec_edgar__concepts_canonical`
+  model + `canonical_concepts_dictionary` seed bridge the discontinuity —
+  see section 7.7 below.
+- **`period_start_date` extracted from `$.start`.** Session 3 extended
+  `int_sec_edgar__concepts` to pull the new column. Populated for
+  income-statement and cash-flow concepts; NULL for balance-sheet
+  point-in-time concepts (Assets, Liabilities, StockholdersEquity)
+  because SEC EDGAR omits `start` for instant-period facts. Verified
+  by check 11 in `sql/verify/02`.
 
 ### 7.6 Verification surface for the intermediate layer
 
-Three checks at session 2 close, all PASS:
+Phase 2 sessions 2-3 close: 11/11 PASS on the SQL verification suite +
+19/19 PASS on dbt schema tests + 4/4 PASS on dbt run. Highlight checks:
 
-- `dbt parse` returns 0 errors, 0 warnings (initially fired
-  `MissingArgumentsPropertyInGenericTestDeprecation` on first parse — a
-  dbt-core 1.10.5+ change requiring `accepted_values` tests to nest under
-  an `arguments` property; fixed in-session and re-verified clean).
-- `dbt run` reports PASS=3 WARN=0 ERROR=0 across the existing staging
-  model plus the two new models.
-- Athena smoke against Apple: 5 concept rows for the 5 in-scope concepts,
-  three sample Revenues values cross-referenced against the public 10-K
-  filing — FY2018 $265.595B, FY2017 $229.234B, FY2016 $215.639B — all
-  match SEC records exactly.
+- Apple FY2016-FY2018 annual revenues (bare `Revenues` tag era):
+  $265.595B / $229.234B / $215.639B — match SEC records exactly.
+- Apple FY2019-FY2021 annual revenues under canonical `revenue`
+  (ASC 606 `RevenueFromContractWithCustomerExcludingAssessedTax` era):
+  $260.174B / $274.515B / $365.817B — match published 10-K filings exactly.
+  Proves the seed-driven alias collapse bridges the FY18→FY19 discontinuity.
+- Apple canonical revenue has ≥6 distinct fiscal years of continuous
+  coverage (pre-canonical: 3 years under bare `Revenues`).
+- `period_start_date` populated on at least one canonical revenue row
+  (proves the new column extraction).
+
+### 7.7 Canonical-concept reconciliation (Phase 2 session 3)
+
+The session 3 architectural addition is a seed-driven canonical-concept
+dictionary, joined into a second intermediate model that produces the
+final canonical panel downstream consumers (warehouse-layer satellites,
+Gold marts) read from.
+
+**The seed.** `dbt/seeds/canonical_concepts_dictionary.csv` holds 8 rows
+mapping XBRL US-GAAP tag names to project-canonical concept names plus
+financial-statement classification:
+
+| concept_name | canonical_concept | business_area |
+|---|---|---|
+| Revenues | revenue | income_statement |
+| SalesRevenueNet | revenue | income_statement |
+| RevenueFromContractWithCustomerExcludingAssessedTax | revenue | income_statement |
+| RevenueFromContractWithCustomerIncludingAssessedTax | revenue | income_statement |
+| NetIncomeLoss | net_income | income_statement |
+| Assets | assets | balance_sheet |
+| Liabilities | liabilities | balance_sheet |
+| StockholdersEquity | stockholders_equity | balance_sheet |
+
+The four revenue aliases collapse to one canonical name (`revenue`); the
+other four concepts are identity mappings. Authoritative source for the
+revenue alias set: XBRL US Data Quality Committee Revenue Guidance and
+FASB Taxonomy Implementation Guide "Revenue from Contracts with Customers".
+Future extensions = add a row.
+
+**The model.** `dbt/models/intermediate/int_sec_edgar__concepts_canonical.sql`
+INNER JOINs `int_sec_edgar__concepts` to the seed on `concept_name`,
+adds `canonical_concept` and `business_area` columns. INNER JOIN by
+design — any raw concept_name not in the dictionary is excluded, which
+is the contract that guarantees every downstream row carries a curated
+canonical name. New concepts extend by adding both a seed row AND the
+tag to the upstream model's Jinja concept list; the two ends move together.
+
+**Pattern reusability.** The seed-as-dictionary pattern carries forward
+to the Phase 2 session 3+ warehouse layer: hub_concept's business key
+will be `canonical_concept` (a curated stable name), and the alias-to-canonical
+join lineage is auditable through the seed file in git history.
+
+### 7.8 Materialization architecture — intermediate as Iceberg, Bronze cik as enum
+
+Two architectural changes landed in session 3 in response to a dbt-test
+failure that surfaced a deeper partition-projection constraint.
+
+**Intermediate layer: views → Iceberg tables.** The session-2 intermediate
+models materialized as views — cheap, no S3 writes. dbt schema tests
+attempted to scan those views, which cascade-compiled to SELECT queries
+against Bronze raw-text JSON. Bronze's cik partition projection was
+`type=injected` (chosen Phase 1 session 3 for flexibility), which requires
+every query to include a static `cik = '<value>'` predicate. Schema-test
+queries don't include one — so 8 tests errored with `CONSTRAINT_VIOLATION`.
+
+Initial diagnosis pointed at materialization: flipping the intermediate
+layer to `+materialized: table` + `+table_type: iceberg` + `+format: parquet`
+means schema tests scan the materialized Iceberg tables, never reach
+Bronze. This aligned with the locked Phase 2 Silver-as-Iceberg architecture.
+
+Implementation note: removed an initial `+table_properties.format_version: "2"`
+setting after Athena rejected it with `InvalidRequestException: Table
+properties [format_version] are not supported`. AWS Athena's own docs
+enumerate a closed allowlist for Iceberg table properties (`format`,
+`write_compression`, `optimize_rewrite_*`, `vacuum_*`); `format_version`
+is not in the list. Athena defaults to Iceberg v2 anyway. The dbt-athena
+adapter docs recommended this property — they're stale relative to the
+underlying engine's current behavior. Banked: always verify against the
+engine's own docs (`docs.aws.amazon.com/athena`) for stakes-sensitive
+syntax, not just the adapter's documentation.
+
+**Bronze: cik projection switched from type=injected to type=enum.** The
+intermediate materialization itself runs CTAS over Bronze, hitting the
+same type=injected constraint as the schema tests. Switched both Bronze
+table DDLs (`sql/ddl/01_create_bronze_tables.sql` and
+`sql/ddl/02_create_bronze_raw_text_table.sql`) to `'projection.cik.type'
+= 'enum'` with the 100 S&P 100 CIKs enumerated in `'projection.cik.values'`.
+Verified per AWS docs that enum projection has no hard cap on value count
+— the constraint is total Glue Catalog metadata size (~1 MB gzip-compressed),
+which 100 CIKs at ~11 chars each fit comfortably under.
+
+DROP+CREATE for both Bronze tables ran via the Athena Console under
+phil-admin. The underlying S3 data files were untouched; only the Glue
+Catalog table definitions swapped. Existing queries with explicit
+`cik = '<value>'` predicates (Phase 1 verify suite, future Step Functions
+state machine queries) continue to work fine — enum is permissive about
+static-cik filters, just doesn't require them.
+
+Trade-off accepted: new S&P 100 turnover requires editing the enum list
+in both Bronze DDLs and re-running DROP+CREATE. Cheap operation; the
+explicit list serves as documentation of "what's in the lake" anyway.
 
 ## 8. Warehouse layer — Data Vault 2.0 (Phase 2 session 3+)
 

@@ -15,12 +15,12 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 2 in progress.** Session 2 CLOSED 2026-05-27 — first intermediate model live, raw-JSON-read pattern locked as Option B (second Bronze table over same S3 location), verification suite 6/6 PASS against Apple's public 10-K filings. |
-| Next phase | Phase 2 session 3 — canonical-concept reconciliation intermediate model. Maps alias concept names (Revenues / SalesRevenueNet / RevenueFromContractWithCustomerExcludingAssessedTax → canonical "revenue") so downstream consumers don't need to know about the XBRL alias zoo. Add `period_start_date` to the intermediate schema for unambiguous annual-vs-quarterly disambiguation. Then onward to first warehouse-layer Data Vault 2.0 model (hub_company). Est. 60-90 min. |
-| Last session closed | 2026-05-27 (Phase 2 session 2 — CLOSE) |
-| Last bundled commit | 2026-05-27 — Phase 2 session 2 bundle (raw-JSON-read pattern locked as Option B; second Bronze raw-text table + DDL; companion staging model + intermediate model `int_sec_edgar__concepts` exercising json_extract over 5 XBRL concepts; intermediate layer config re-added to dbt_project.yml; sql/verify/02 verification suite 6/6 PASS; DBT_PIPELINE.md section 7 shipped; 2 new LEARNINGS entries; .gitignore extended with dbt/.user.yml) |
+| Active phase | **Phase 2 in progress.** Session 3 CLOSED 2026-05-28 — canonical-concept reconciliation shipped end-to-end, intermediate layer flipped to Iceberg tables, Bronze cik partition projection switched to enum, verification suite 11/11 PASS reconciling Apple's published FY16-FY21 revenues across the ASC 606 alias discontinuity. |
+| Next phase | Phase 2 session 4 — first warehouse-layer Data Vault 2.0 model (hub_company). Reads cik + entity_name from the staging layer; Iceberg merge incremental strategy for future SCD-2 history at the satellite layer. Est. 60-90 min. |
+| Last session closed | 2026-05-28 (Phase 2 session 3 — CLOSE) |
+| Last bundled commit | 2026-05-28 — Phase 2 session 3 bundle (canonical_concepts_dictionary seed + _seeds.yml + dbt_project.yml seeds block; int_sec_edgar__concepts expanded to 8 XBRL tags + period_start_date column; new int_sec_edgar__concepts_canonical model joining the seed; _models.yml extended with column contracts on the new model; sql/verify/02 extended from 6 to 11 checks reconciling Apple FY19-FY21 canonical revenue; intermediate layer flipped to Iceberg tables in dbt_project.yml; Bronze cik partition projection switched type=injected → type=enum on both Bronze table DDLs; 4 new LEARNINGS entries; DBT_PIPELINE.md sections 7.5-7.8 shipped; TEACHING_PREFERENCES.md updated with AWS-identity-naming standing rule) |
 | Active blockers | None |
-| Open questions | None at the architectural level. Two known-and-deferred schema gaps in `int_sec_edgar__concepts` (concept aliasing not yet collapsed; no `period_start_date` column) addressed by the next intermediate model. |
+| Open questions | None at the architectural level. |
 
 ---
 
@@ -88,6 +88,139 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-05-28 — Phase 2 session 3 — canonical-concept reconciliation + intermediate-as-Iceberg + Bronze enum switch + verification 11/11 PASS
+
+**Goal.** Ship canonical-concept reconciliation as a second intermediate
+model that collapses the four S&P 100 revenue alias XBRL tags (Revenues,
+SalesRevenueNet, RevenueFromContractWithCustomerExcludingAssessedTax,
+RevenueFromContractWithCustomerIncludingAssessedTax) to one canonical
+'revenue' name via a seed-driven dictionary; add `period_start_date` to
+the upstream intermediate model; extend the verification suite with
+post-FY2018 Apple revenue continuity checks proving the ASC 606
+discontinuity is bridged. Stretch: first warehouse-layer hub_company.
+
+**What landed.**
+
+- **`canonical_concepts_dictionary` seed shipped.** `dbt/seeds/canonical_concepts_dictionary.csv`.
+  8 rows mapping XBRL US-GAAP tag names to project-canonical concepts
+  with business_area classification (income_statement / balance_sheet /
+  cash_flow). 4 revenue aliases collapse to 'revenue'; the other 4 in-scope
+  concepts identity-map. Authoritative source: XBRL US DQC Revenue Guidance
+  + FASB Taxonomy Implementation Guide "Revenue from Contracts with
+  Customers". `dbt/seeds/_seeds.yml` shipped alongside with column
+  descriptions + not_null/unique tests.
+- **`dbt_project.yml` extended.** New `seeds:` block with column types
+  locked (varchar(128) / varchar(64) / varchar(32)). Per-seed config under
+  `financial_analytics.canonical_concepts_dictionary`.
+- **`int_sec_edgar__concepts` extended.** Concept list expanded from 5 to
+  8 XBRL tags (added the 3 revenue alias variants). New `period_start_date`
+  column extracted from `$.start` — populated for income-statement and
+  cash-flow concepts; NULL for balance-sheet point-in-time facts (Athena's
+  TRY_CAST handles both cleanly). `_models.yml` accepted_values list
+  expanded to match.
+- **`int_sec_edgar__concepts_canonical` shipped.**
+  `dbt/models/intermediate/int_sec_edgar__concepts_canonical.sql`. INNER
+  JOIN to the seed on `concept_name`. Adds `canonical_concept` +
+  `business_area` columns alongside the existing schema. By design any
+  concept not in the dictionary is excluded — contract guarantee that
+  every downstream row carries a curated canonical name. `_models.yml`
+  shipped with full column contracts + accepted_values tests on
+  canonical_concept and business_area.
+- **`sql/verify/02` extended from 6 to 11 checks.** Five new checks cover
+  Apple FY2019-FY2021 canonical revenue values reconciling to published
+  10-K filings ($260.174B / $274.515B / $365.817B), continuity check
+  (≥6 distinct fiscal years of canonical revenue, proving the FY18→FY19
+  discontinuity is bridged), and `period_start_date` population check
+  on canonical revenue rows. 11/11 PASS in 1.805 sec, 8.05 MB scanned.
+- **Intermediate layer materialization flipped views → Iceberg tables.**
+  `dbt_project.yml` `models.financial_analytics.intermediate` block now
+  carries `+materialized: table` + `+table_type: iceberg` + `+format: parquet`.
+  Reason: schema tests against Bronze-cascade views hit Bronze's
+  type=injected cik partition projection constraint; materializing the
+  intermediate as Iceberg means tests scan compact Parquet files on S3,
+  not raw JSON via the view chain. Also aligned with the locked Phase 2
+  Silver-as-Iceberg architecture.
+- **Bronze cik partition projection switched type=injected → type=enum.**
+  Both `sql/ddl/01_create_bronze_tables.sql` and `02_create_bronze_raw_text_table.sql`
+  updated. `'projection.cik.values'` enumerates all 100 S&P 100 CIKs.
+  Phil DROP+CREATEd both Bronze tables via Athena Console (phil-admin
+  identity) in 4 statements. S3 data untouched; Glue Catalog table
+  definitions swapped. The Phase 1 verify suite (queries with explicit
+  cik = '<value>' filters) continues to work unchanged.
+- **DBT_PIPELINE.md sections 7.5-7.8 shipped.** 7.5 reframes session-2
+  limitations as session-3 deliverables; 7.6 documents the 11/11 PASS
+  verification surface; 7.7 walks through the canonical-concept seed
+  pattern; 7.8 narrates the materialization-architecture flip + Bronze
+  enum diagnosis loop.
+- **TEACHING_PREFERENCES.md updated.** Phil's locked rule: every Athena
+  / AWS Console instruction names the IAM identity (phil-admin vs phil-dbt)
+  upfront. Banked alongside the standing conventions.
+- **LEARNINGS.md** — four new entries banked (see below).
+
+**Diagnosis loops banked (LEARNINGS entries).**
+
+1. Bronze cik partition projection `type=injected` blocks both dbt CTAS
+   materialization and dbt schema-test scans — fix is type=enum.
+2. dbt-athena docs recommend Iceberg `table_properties.format_version=2`
+   that AWS Athena engine rejects with InvalidRequestException — verify
+   against engine docs (`docs.aws.amazon.com/athena`), not adapter-wrapper
+   docs, for stakes-sensitive syntax.
+3. Athena COLUMN_NOT_FOUND error message includes misleading
+   "or requester is not authorized to access requested resources"
+   boilerplate — likely SQL projection issue, not IAM.
+4. Phil's standing AWS-identity-naming preference now locked in
+   TEACHING_PREFERENCES — every Console-step instruction names the
+   identity to sign in as.
+
+**Verification surface at session 3 close.**
+
+- 19/19 dbt schema tests PASS (was 0 tests pre-session)
+- 11/11 SQL verify suite PASS (was 6/6 pre-session)
+- 4/4 dbt run PASS (2 view models + 2 Iceberg table models)
+- 1/1 dbt seed PASS (canonical_concepts_dictionary materialized)
+
+**Decisions locked this session.**
+
+- **Seed-as-dictionary pattern for reference data.** Standard senior-DE
+  approach. canonical_concepts_dictionary is the first; future portable
+  reference data (e.g. sector mappings, ticker→CIK lookup if introduced)
+  follows the same shape.
+- **Intermediate layer = Iceberg table from session 3 onwards.** Views
+  remain default for staging only (1:1 pass-throughs over Bronze where
+  materialization adds nothing).
+- **Bronze cik partition projection = type=enum.** Both Bronze tables.
+  Trade-off accepted: new S&P 100 turnover requires DDL update + DROP+CREATE.
+
+**Blockers / surprises.** Two within-session debug loops, both Phil-driven
+on diagnosis (per the in-session debug discipline):
+
+- First dbt test run errored on type=injected constraint. Phil correctly
+  identified the dbt run vs dbt test distinction; my initial diagnosis
+  only covered the schema-test angle and missed that CTAS materialization
+  itself hits the same constraint. Second loop surfaced when we then
+  flipped to Iceberg materialization and dbt run errored. Final fix:
+  type=enum on Bronze cik projection. Two LEARNINGS entries between them.
+- Athena rejected `format_version=2` Iceberg table property mid-flow.
+  Initially set from dbt-athena adapter docs recommendation; AWS Athena's
+  own docs enumerate a closed allowlist that excludes the property.
+  Removed; Athena defaults to Iceberg v2 anyway. LEARNINGS banked.
+
+**NOT in this session — deferred.**
+
+- **First warehouse-layer Data Vault 2.0 hub_company** → Phase 2 session 4.
+  Originally a session-3 stretch; deferred due to time spent on the
+  two debug loops above.
+- **README.md Status line refresh** → Phase 2 close.
+- **Multi-unit support on int_sec_edgar__concepts** (currently USD only)
+  → if needed. Defer until a non-USD concept is in scope.
+
+**Next session.** Phase 2 session 4 — first warehouse-layer Data Vault 2.0
+model: hub_company (cik as business key). Iceberg incremental materialization
+with merge strategy. Establishes the DV2.0 pattern that link_company_filing,
+sat_company_metadata, etc. follow in subsequent sessions. Est. 60-90 min.
+
+---
 
 ### 2026-05-27 — Phase 2 session 2 — first intermediate model + raw-JSON-read pattern locked + verification 6/6 PASS
 
@@ -737,7 +870,7 @@ full-100 scale-up.
 
 ---
 
-## Files in the project (Phase 2 session 2 close inventory — 2026-05-27)
+## Files in the project (Phase 2 session 3 close inventory — 2026-05-28)
 
 Doc-shaped:
 
@@ -748,29 +881,32 @@ Doc-shaped:
 - `TEACHING_PREFERENCES.md` ✓ (Phase 2 session 1 — third re-lock on paste-able discipline)
 - `ENGINEERING_STANDARDS.md` ✓
 - `GLOSSARY.md` ✓
-- `LEARNINGS.md` ✓ (19 Project #3 entries — 10 sessions 1-3 + 3 session 4 + 4 Phase 2 session 1 + 2 Phase 2 session 2)
+- `LEARNINGS.md` ✓ (23 Project #3 entries — 10 sessions 1-3 + 3 session 4 + 4 Phase 2 session 1 + 2 Phase 2 session 2 + 4 Phase 2 session 3)
 - `EXTRACT_PIPELINE.md` ✓ (Phase 1 walkthrough — frozen at Phase 1 close)
-- `DBT_PIPELINE.md` ✓ (Phase 2 session 2 — sections 1-7, 9, 10 shipped; section 8 expands at Phase 2 session 3+)
+- `DBT_PIPELINE.md` ✓ (Phase 2 session 3 — sections 1-7.8, 9, 10 shipped; section 8 expands at Phase 2 session 4+)
 
 Code-shaped:
 
 - `scripts/smoke_test_aws.py` ✓ (Phase 1 session 2)
 - `scripts/extract_sec_edgar.py` ✓ (Phase 1 sessions 2-4)
 - `scripts/verify_bronze_s3_metadata.py` ✓ (Phase 1 session 4)
-- `sql/ddl/01_create_bronze_tables.sql` ✓ (Phase 1 session 3)
-- `sql/ddl/02_create_bronze_raw_text_table.sql` ✓ (Phase 2 session 2 — second Bronze table, raw-text view over same S3 location)
+- `sql/ddl/01_create_bronze_tables.sql` ✓ (Phase 1 session 3; Phase 2 session 3 — cik projection switched type=injected → type=enum with 100 CIKs enumerated)
+- `sql/ddl/02_create_bronze_raw_text_table.sql` ✓ (Phase 2 session 2 — second Bronze table, raw-text view over same S3 location; Phase 2 session 3 — cik projection switched to type=enum)
 - `sql/verify/01_phase1_bronze_verification.sql` ✓ (Phase 1 sessions 3-4)
-- `sql/verify/02_phase2_silver_intermediate_verification.sql` ✓ (Phase 2 session 2 — 6/6 PASS)
-- `iam/lakehouse_dbt_runtime_policy.json` ✓ (Phase 2 session 1 — Customer Managed Policy JSON for phil-dbt; Phase 2 session 2 — coverage validated, no edits needed)
-- `dbt/dbt_project.yml` ✓ (Phase 2 session 1; Phase 2 session 2 — intermediate +materialized: view re-added)
+- `sql/verify/02_phase2_silver_intermediate_verification.sql` ✓ (Phase 2 session 3 — extended from 6 to 11 checks; 11/11 PASS)
+- `iam/lakehouse_dbt_runtime_policy.json` ✓ (Phase 2 session 1 — Customer Managed Policy JSON for phil-dbt; Phase 2 sessions 2-3 — coverage validated, no edits needed)
+- `dbt/dbt_project.yml` ✓ (Phase 2 session 1; Phase 2 session 2 — intermediate +materialized: view re-added; Phase 2 session 3 — intermediate flipped to +materialized: table + Iceberg config; seeds: block added with column_types)
 - `dbt/profiles.yml.example` ✓ (Phase 2 session 1 — env_var template, real profiles.yml gitignored)
 - `dbt/packages.yml` ✓ (Phase 2 session 1 — dbt_utils 1.x)
+- `dbt/seeds/canonical_concepts_dictionary.csv` ✓ (Phase 2 session 3 — 8 rows mapping XBRL US-GAAP tag names to project-canonical concepts + business_area)
+- `dbt/seeds/_seeds.yml` ✓ (Phase 2 session 3 — seed column contracts + not_null/unique tests)
 - `dbt/models/staging/_sources.yml` ✓ (Phase 2 session 1; Phase 2 session 2 — second Bronze source declared)
 - `dbt/models/staging/stg_sec_edgar__companyfacts.sql` ✓ (Phase 2 session 1 — typed cover-page staging model, PASSING)
 - `dbt/models/staging/stg_sec_edgar__companyfacts_raw.sql` ✓ (Phase 2 session 2 — raw-text staging model, PASSING)
-- `dbt/models/intermediate/int_sec_edgar__concepts.sql` ✓ (Phase 2 session 2 — first intermediate model, PASSING)
-- `dbt/models/intermediate/_models.yml` ✓ (Phase 2 session 2 — intermediate-layer model contracts)
-- `dbt/models/warehouse/.gitkeep` (Phase 2 session 1 — placeholder until session 3+ first DV2.0 model)
+- `dbt/models/intermediate/int_sec_edgar__concepts.sql` ✓ (Phase 2 session 2 — first intermediate model; Phase 2 session 3 — expanded to 8 XBRL tags + period_start_date; PASSING as Iceberg table)
+- `dbt/models/intermediate/int_sec_edgar__concepts_canonical.sql` ✓ (Phase 2 session 3 — canonical-concept reconciliation via seed join; PASSING as Iceberg table)
+- `dbt/models/intermediate/_models.yml` ✓ (Phase 2 session 2; Phase 2 session 3 — extended with canonical model contracts)
+- `dbt/models/warehouse/.gitkeep` (Phase 2 session 1 — placeholder until session 4+ first DV2.0 model)
 - `dbt/models/marts/.gitkeep` (Phase 2 session 1 — placeholder until Phase 4 first mart model)
 - `.vscode/settings.json` ✓ (Phase 2 session 1 — yaml.schemas override for dbt_project.yml)
 - `.vscode/dbt_project.permissive.schema.json` ✓ (Phase 2 session 1 — empty schema referenced by settings.json)
@@ -813,6 +949,8 @@ Repo-config:
 
 ---
 
-*Last updated: 2026-05-27 (Phase 2 session 2 close — raw-JSON-read pattern
-locked, first intermediate model live, verification suite 6/6 PASS against
-Apple's public 10-K filings). Append a session-log entry at every session close.*
+*Last updated: 2026-05-28 (Phase 2 session 3 close — canonical-concept
+reconciliation shipped, intermediate layer flipped to Iceberg tables,
+Bronze cik partition projection switched to type=enum, verification suite
+11/11 PASS reconciling Apple's FY16-FY21 revenues across the ASC 606
+discontinuity). Append a session-log entry at every session close.*
