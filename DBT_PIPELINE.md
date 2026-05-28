@@ -1162,6 +1162,193 @@ Phase 4 Gold marts: every (company, filing, concept, period) fact
 observation is in sat_concept_value, navigable via the FK chain
 through link_filing_concept_period to the three hubs.
 
+### 8.20 Fourth satellite: sat_concept_canonical — first multi-active satellite (Phase 2 session 9)
+
+Session 9 introduces the project's first multi-active satellite (MAS).
+The architectural pattern is genuinely new relative to sessions 6/7/8.
+Those three satellites are 1:1 with their parent — every parent hash
+key has exactly one active sat row at any point in time. The MAS
+relaxes that invariant: multiple sat rows can be concurrently active
+for the same parent_hk. The DV2.0 textbook example is a customer
+having multiple active phone numbers; the project example is a
+canonical XBRL concept having multiple active raw US-GAAP tag names.
+
+**The business problem the MAS solves.** Session 8's sat_concept_value
+applies a MIN(value) tie-breaker to collapse the per-canonical
+duplicates that arise from multi-tag-same-period dual-reporting
+(Risk 16 sub-decision). That collapse is deterministic and
+audit-traceable, but it does lose information: the canonical
+'revenue' row stored in sat_concept_value for Apple FY2019 doesn't
+record which of the 4 revenue alias raw tags
+(`Revenues`, `SalesRevenueNet`,
+`RevenueFromContractWithCustomerExcludingAssessedTax`,
+`RevenueFromContractWithCustomerIncludingAssessedTax`) the value
+actually came from. For a regulator or analyst asking "which raw
+tag did Apple report FY2019 revenue under" — that question can't
+be answered from sat_concept_value alone. sat_concept_canonical
+records the raw → canonical mapping observed in actual data as
+immutable DV2.0 sat rows, so the provenance is recoverable
+forever. The MAS pattern is the right shape because canonical
+'revenue' has 4 concurrent active raw tags in source, not one.
+
+**Forward-verify pass front-loaded every architectural call.**
+Doc-verify against AutomateDV's ma_sat tutorial and Scalefree's
+multi-active-satellites Part 1 article locked the textbook MAS
+PK as composite (parent_hk, child_dependent_key, load_datetime).
+The empirical four-aggregate probe against
+int_sec_edgar__concepts_canonical returned 93,869 rows / 5
+canonicals / 8 raw tags / 2 extract_dates — matching session 8
+probe results exactly. The cardinality-prediction probe (distinct
+(canonical, raw_tag) pairs) returned 8 — equal to the
+canonical_concepts_dictionary seed row count. First-load
+prediction = 8 rows = MAS cardinality invariant.
+
+**Risk 17 — degenerate MAS payload (CDK == payload).** Banked
+2026-05-29 at the session 9 forward-verify pass. In the textbook
+MAS example (customer phone numbers), the CDK identifies which
+active row this is (the phone number itself, possibly with a type
+code) and the payload is a separate descriptive attribute (e.g.,
+customer name). For sat_concept_canonical the raw concept_name
+IS both the active-row identifier AND the audit-lineage attribute
+being preserved — there's no separate descriptive payload that
+varies per active row (business_area in the seed is 1:1 with
+canonical_concept, which is a parent-level attribute and would
+belong on a regular sat on hub_concept, not on this MAS). The
+hashdiff is therefore structurally constant per (parent, CDK)
+pair by construction — once a (canonical, raw_tag) pair is
+observed, that pair's hashdiff never changes. The SCD-2 mechanic
+still fires correctly on the (parent, CDK) uniqueness branch
+(new pair = new row inserted), but the hashdiff-change branch
+won't fire in practice. The hashdiff column is kept anyway for
+project-wide visual consistency with sessions 6/7/8 satellites
+plus future-proofing if descriptive payload attributes are ever
+added (e.g., a future per-raw-tag deprecation_date).
+
+**Risk 18 — CDK selection priority: stable type code over
+sub-sequence.** Banked 2026-05-29 at the session 9 forward-verify
+pass. Scalefree's multi-active-satellites Part 1 explicitly
+prioritises a stable source-provided "type code" (e.g., phone
+type: 'home'/'business'/'cell') over the sub-sequence-number
+fallback. Sub-sequence auto-numbering is the FALLBACK pattern
+for sources that don't provide a stable identifier. Raw XBRL
+US-GAAP tag names are stable taxonomy identifiers — they don't
+drift between extracts for the same logical concept (a 10-K
+filed under 'Revenues' in 2017 is still tagged 'Revenues' on
+every re-extract today). The CDK is therefore SHA-256 of raw
+concept_name directly:
+
+```sql
+to_hex(sha256(to_utf8(CAST(concept_name AS varchar)))) AS sub_sequence_key
+```
+
+Auto-numbering rejected: fragile if seed reordered, not
+source-faithful, would re-shuffle CDK assignments on every dbt
+refresh corrupting the audit lineage.
+
+**MAS-specific surrogate hash key construction.** The session
+6/7/8 sat hash chain over (parent_hk || '||' || load_datetime)
+extends to 3 components for MAS by adding the CDK between:
+
+```sql
+to_hex(sha256(to_utf8(
+    CAST(hub_concept_hk AS varchar) || '||' ||
+    CAST(sub_sequence_key AS varchar) || '||' ||
+    CAST(load_datetime AS varchar)
+))) AS sat_concept_canonical_hk
+```
+
+Visual consistency with the rest of the warehouse-layer surface
+(every model has one column named `<class>_<entity>_hk` that's
+its single-column unique_key) is preserved; the natural-PK
+contract (hub_concept_hk, sub_sequence_key, load_datetime) is
+enforced at test time via the 3-column
+dbt_utils.unique_combination_of_columns rather than at the
+engine-level unique_key.
+
+**MAS-adapted SCD-2 anti-join filter.** Session 6's sat anti-join
+filter (Risk 9) partitioned the window by parent_hk alone. For
+MAS, "the latest stored row per parent" doesn't make sense
+because the parent has multiple concurrent active rows. The
+partition extends to (parent_hk, sub_sequence_key) — the
+active-row PK:
+
+```sql
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM (
+        SELECT
+            hub_concept_hk,
+            sub_sequence_key,
+            hashdiff,
+            ROW_NUMBER() OVER (
+                PARTITION BY hub_concept_hk, sub_sequence_key
+                ORDER BY load_datetime DESC
+            ) AS rn
+        FROM {{ this }}
+    ) latest
+    WHERE latest.hub_concept_hk = inbound.hub_concept_hk
+      AND latest.sub_sequence_key = inbound.sub_sequence_key
+      AND latest.hashdiff = inbound.hashdiff
+      AND latest.rn = 1
+)
+```
+
+Without sub_sequence_key in the partition and match clause, every
+newly-extracted raw tag for the same canonical would compare
+against the wrong row's latest hashdiff — either re-inserting
+duplicates or skipping valid new rows. The MAS-adapted filter
+preserves the SCD-2 contract per-active-row.
+
+**First dbt run delivered exactly as predicted.** `dbt run --select
+sat_concept_canonical` returned `OK 8 in 11.33s` — matching the
+forward-verify probe-2 cardinality prediction on the first try.
+The Risk 12 + Risk 13 + Risk 16 carry-forwards (cardinality
+discipline + empirical probe + post-canonical DISTINCT) all
+earned their keep at design time, not first-run time.
+
+### 8.21 Verification surface for sat_concept_canonical
+
+One new verify file extending the established per-model pattern,
+sized slightly heavier than the standard sat verify because MAS
+carries an extra hash column (sub_sequence_key) plus an
+MAS-specific cardinality invariant guard:
+
+- `sql/verify/10_phase2_warehouse_sat_concept_canonical_verification.sql`
+  — 14 CTE PASS/FAIL checks: sat hash unique + not_null + length
+  64, hashdiff not_null + length 64, sub_sequence_key not_null +
+  length 64, FK closure to hub_concept, 3-column composite natural
+  PK uniqueness, MAS cardinality invariant (distinct (parent_hk,
+  sub_sequence_key) count = 8), parent coverage (5 distinct
+  canonicals), sat_hk + hashdiff determinism on canonical
+  'revenue' + raw tag 'Revenues' anchor sample, record_source
+  constant. 14/14 PASS in 1.84 sec.
+
+**Idempotency proven.** Second `dbt run --select sat_concept_canonical`
+returned `OK 0 in 25.72s` — the MAS NOT EXISTS anti-join filter
+excluded all 8 inbound rows because for every (parent, CDK) pair
+already stored, the degenerate hashdiff matches the latest
+stored hashdiff by construction (Risk 17 behavior). The SCD-2
+contract works as designed; future loads of the same canonical
+seed mapping will continue to no-op as expected.
+
+**Cumulative warehouse-layer verification surface at session 9
+close:** 3 hubs (hub_company + hub_filing + hub_concept) + 2 links
+(link_company_filing + link_filing_concept_period) + 4 sats
+(sat_filing_metadata + sat_company_metadata + sat_concept_value
++ sat_concept_canonical) = **88 dbt schema tests PASS** (77
+cumulative through session 8 + 11 new), **90 SQL structural
+verify checks PASS** (76 cumulative through session 8 + 14 new).
+
+The raw vault now carries both the fact-value layer
+(sat_concept_value with MIN-collapsed canonical values) AND the
+audit-lineage layer (sat_concept_canonical with raw-tag
+provenance for every canonical observed in source). The two
+satellites together make the canonical-collapse decision fully
+auditable — analysts get clean continuous time series via
+canonical_concept; regulators get raw-tag traceability via
+sub_sequence_key. Both queries hit the same hub_concept and
+share the same DV2.0 audit-lineage contract.
+
 ## 9. Verification surface (per session)
 
 Each dbt session ships with a verification suite parallel to Phase 1's

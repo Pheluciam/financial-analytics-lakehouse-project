@@ -823,3 +823,155 @@ models:
           'sec_edgar.companyfacts'.
         tests:
           - not_null
+
+  - name: sat_concept_canonical
+    description: |
+      Data Vault 2.0 multi-active satellite (MAS) — the audit-lineage
+      model. Parent = hub_concept (canonical_concept BK, 5 rows). One
+      row per (canonical_concept, raw XBRL US-GAAP tag name) pair
+      observed in actual SEC EDGAR companyfacts data. Expected first-load
+      row count = 8 (4 revenue alias raw tags mapping to canonical
+      'revenue' + 4 identity-mapped tags); empirically verified at
+      session 9 forward-verify probe 2 — 8 distinct (canonical, raw_tag)
+      pairs, matches canonical_concepts_dictionary seed row count
+      exactly. THE MODEL preserving raw concept_name → canonical_concept
+      audit lineage with DV2.0-native immutability, defending the
+      MIN(value) information-loss decision baked into sat_concept_value
+      (session 8) by retaining regulatory-defensible provenance to the
+      original XBRL US-GAAP taxonomy tag every fact was reported under.
+      FIRST MULTI-ACTIVE SATELLITE in the project — new DV2.0 mechanic
+      relative to the 1:1 sat shape of sessions 6/7/8. MAS allows
+      multiple concurrent active rows per parent hash key at the same
+      point in time (canonical 'revenue' has 4 active raw tags
+      simultaneously). The textbook MAS PK is composite: (parent_hk,
+      sub_sequence_key, load_datetime). Verified against AutomateDV
+      ma_sat tutorial + Scalefree multi-active-satellites article at
+      the session 9 forward-verify pass. Child Dependent Key (CDK) =
+      sub_sequence_key = SHA-256 of raw concept_name (LEARNINGS Risk 18,
+      2026-05-29 — Scalefree's "stable type code over sub-sequence"
+      priority rule applied; XBRL US-GAAP tag names are stable taxonomy
+      identifiers). Degenerate payload — CDK == payload (LEARNINGS
+      Risk 17, 2026-05-29 — raw concept_name IS both the active-row
+      identifier and the audit-lineage attribute; hashdiff is
+      structurally constant per (parent, CDK) by construction). SCD-2
+      mechanic adapted for MAS: window partition + NOT EXISTS match
+      both on (hub_concept_hk, sub_sequence_key) — the active-row PK —
+      not just hub_concept_hk. Source =
+      int_sec_edgar__concepts_canonical (matches hub_concept's lineage
+      rule). DISTINCT (canonical_concept, concept_name) at source-side
+      collapses 93,869 source rows to 8 distinct pairs (Risk 16
+      post-canonical natural cardinal tuple discipline). Single-column
+      unique_key = sat_concept_canonical_hk (a 3-component SHA-256 hash
+      over hub_concept_hk || '||' || sub_sequence_key || '||' ||
+      load_datetime — MAS extension of sessions 6/7/8 two-component sat
+      hash); composite natural PK (hub_concept_hk, sub_sequence_key,
+      load_datetime) enforced at test time via
+      dbt_utils.unique_combination_of_columns below. hashdiff is
+      SHA-256 over the COALESCE-sentinel-protected raw concept_name
+      (Risk 8; '||' delimiter dropped for single-column payload per
+      session 7 sat_company_metadata pattern). Materialized as Iceberg
+      via merge incremental strategy; on_schema_change=ignore MANDATORY
+      per Risk 2. Walkthrough: DBT_PIPELINE.md section 8.
+    tests:
+      # MAS composite natural PK contract: one row per (parent hash key,
+      # CDK, load_datetime). 3-COLUMN composite (vs 2-column for sessions
+      # 6/7/8 sats) because the active-row identifier (sub_sequence_key)
+      # is now part of the natural PK by DV2.0 MAS convention. Auditable
+      # at test time via dbt_utils; the single-column unique_key on
+      # sat_concept_canonical_hk enforces the same uniqueness at engine
+      # level via merge.
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - hub_concept_hk
+              - sub_sequence_key
+              - load_datetime
+    columns:
+      - name: sat_concept_canonical_hk
+        description: |
+          SHA-256 hash of (hub_concept_hk || '||' || sub_sequence_key
+          || '||' || load_datetime), hex-encoded. Single-column
+          surrogate primary key for the MAS — matches the hub/link/sat
+          single-hash-PK surface so every warehouse-layer model looks
+          the same. MAS-specific 3-component construction (vs
+          2-component for sessions 6/7/8 sats) reflects the active-row
+          dimension in the natural PK.
+        tests:
+          - not_null
+          - unique
+
+      - name: hashdiff
+        description: |
+          SHA-256 hash over the COALESCE-sentinel-protected raw
+          concept_name. Single-column payload — no '||' delimiter
+          required (delimiter defends against multi-column concat
+          ambiguity not present here). '^^' sentinel defeats Trino's
+          concat NULL propagation per Risk 8. Degenerate per Risk 17 —
+          hashdiff is structurally constant per (parent, CDK) by
+          construction. SCD-2 mechanic still fires on the (parent, CDK)
+          uniqueness branch correctly; column retained for project-wide
+          visual consistency and future-proofing.
+        tests:
+          - not_null
+
+      - name: sub_sequence_key
+        description: |
+          Child Dependent Key (CDK) — the MAS active-row identifier.
+          SHA-256 hash of raw concept_name, hex-encoded. Stable
+          source-provided type code per Scalefree's priority rule
+          (LEARNINGS Risk 18) — raw XBRL US-GAAP tag names don't drift
+          between extracts for the same logical concept. Part of the
+          composite natural PK (hub_concept_hk, sub_sequence_key,
+          load_datetime).
+        tests:
+          - not_null
+
+      - name: hub_concept_hk
+        description: |
+          Foreign key into hub_concept. SHA-256 hash of
+          canonical_concept (single-key chain, identical to
+          hub_concept.hub_concept_hk).
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('hub_concept')
+                field: hub_concept_hk
+
+      - name: canonical_concept
+        description: |
+          Canonical XBRL concept name (e.g., 'revenue', 'net_income').
+          Carried on the satellite alongside the parent FK hash so
+          downstream consumers can read the audit-lineage row without
+          joining back to hub_concept. Identical to the parent BK.
+        tests:
+          - not_null
+
+      - name: concept_name
+        description: |
+          Raw XBRL US-GAAP tag name as reported in source SEC EDGAR
+          companyfacts JSON (e.g., 'Revenues', 'SalesRevenueNet',
+          'RevenueFromContractWithCustomerExcludingAssessedTax',
+          'NetIncomeLoss'). The AUDIT-LINEAGE attribute — preserves
+          regulatory-defensible provenance to the original taxonomy
+          tag. Doubles as both CDK source (hashed into sub_sequence_key)
+          and payload (Risk 17 degenerate payload pattern).
+        tests:
+          - not_null
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) recording the load batch this satellite row
+          landed in. Part of the natural composite PK with
+          hub_concept_hk + sub_sequence_key. Set on insert, never
+          updated.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          String identifier of the source system / dataset this
+          satellite row was first seen in. Constant
+          'sec_edgar.companyfacts'.
+        tests:
+          - not_null

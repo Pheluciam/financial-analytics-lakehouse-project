@@ -200,26 +200,58 @@ Brief explainer; full reference in GLOSSARY.md and DBT_PIPELINE.md.
 
 **Implementation approach (locked 2026-05-28 after phase-kickoff forward-verify pass).** Data Vault 2.0 hubs / links / satellites for Project #3 are HAND-ROLLED in plain dbt-athena SQL — NOT via the AutomateDV (formerly dbtvault) package. Verified against automate-dv.readthedocs.io Platform Support page: AutomateDV officially supports Snowflake, BigQuery, MS SQL Server, Databricks, Postgres; Athena is not on the supported list and not on the planned list. The hand-rolled approach is the stronger portfolio story regardless — recruiters see pattern understanding (you can write a SCD-2 satellite from scratch), not just library usage. Full diagnosis loop banked in LEARNINGS.md "Forward-projected risks" subsection.
 
-**Hubs** hold the unique business keys of entities. Planned hubs:
+**Hubs** hold the unique business keys of entities. Actual hubs (locked through
+session 8, 2026-05-28):
 
-- `h_company` — one row per company (business key: CIK)
-- `h_filing` — one row per filing (business key: accession number)
-- `h_concept` — one row per XBRL concept (business key: canonical concept name)
-- `h_period` — one row per reporting period (business key: period end date + form type)
+- `hub_company` — one row per company (business key: CIK). 100 rows. Shipped
+  session 4.
+- `hub_filing` — one row per filing (business key: accession_number). 6,551
+  rows. Shipped session 5.
+- `hub_concept` — one row per canonical XBRL concept (business key:
+  canonical_concept). 5 rows. Shipped session 8.
+- `hub_period` — **DEFERRED indefinitely** per LEARNINGS Risk 14 (2026-05-28
+  forward-verify probe). 10,974 distinct period instances is transactional-grain
+  territory, not reference-hub territory. Period attributes live as descriptive
+  link-level payload on link_filing_concept_period instead.
 
-**Links** hold relationships between hubs. Planned links:
+**Links** hold relationships between hubs. Actual links:
 
-- `l_company_filing` — which filings belong to which company
-- `l_filing_concept` — which concepts appear in which filing
-- `l_filing_period` — which reporting period each filing covers
+- `link_company_filing` — which filings belong to which company. 6,551 rows.
+  Shipped session 5.
+- `link_filing_concept_period` — 3-way standard link associating hub_company +
+  hub_filing + hub_concept with the per-period observation grain (period
+  attributes as descriptive link-level payload, NOT a separate hub_period).
+  89,821 rows. Shipped session 8. **Supersedes** the originally-planned
+  `l_filing_concept` + `l_filing_period` — the 3-way link with period payload
+  is the more DV2.0-idiomatic shape per LEARNINGS Risks 14 + 15.
 
 **Satellites** hold descriptive attributes + history (SCD-2 native to the
-pattern). Planned satellites:
+pattern). Actual + scheduled satellites:
 
-- `s_company_metadata` — company name, sector, SIC code, address (rarely changes)
-- `s_filing_metadata` — filing date, accepted date, form type, accession URL
-- `s_concept_value` — the actual XBRL fact value + unit + period — the data
-- `s_concept_canonical` — mapping from raw concept name to canonical concept
+- `sat_filing_metadata` — form_type + filed_date. Shipped session 6.
+- `sat_company_metadata` — entity_name. Shipped session 7.
+- `sat_concept_value` — the actual XBRL fact value + unit, parent =
+  link_filing_concept_period. THIS IS the model holding the real numerical
+  financial data every Phase 4 Gold mart consumes. 89,821 rows. Shipped
+  session 8.
+- `sat_concept_canonical` — raw concept_name → canonical_concept audit lineage
+  mapping. **Scheduled session 9** (2026-05-28 lock per "ship the most
+  professional version a senior DE would land in production" rule). Multi-active
+  satellite pattern on hub_concept — new DV2.0 mechanic, defends the MIN(value)
+  information-loss decision baked into sat_concept_value by preserving
+  raw-tag provenance for regulatory-defensible audit lineage.
+
+**Business Vault objects** (Scalefree-canonical layer between raw vault and
+information marts). **Scheduled session 10** (2026-05-28 lock per the same
+rule):
+
+- PIT (Point-in-Time) tables — pre-compute per-as-of-date snapshots joining a
+  parent hub to its current satellites.
+- Bridge tables — pre-compute hub-link-hub join graphs at a point in time.
+
+Both demonstrate full DV2.0 fluency beyond the Raw Vault and materially
+accelerate Phase 4 mart queries by collapsing multi-join walks to straight
+SELECTs against the Business Vault.
 
 Native SCD, full audit lineage, restatement history captured by appending
 new satellite rows rather than updating in place. Strong fit for the
@@ -289,7 +321,7 @@ Numbered Phase 1 onward; Phase 0 is the planning phase closing now.
 |---|---|---|
 | **Phase 0** (closing 2026-05-23) | Planning + lock | PROJECT_PLAN.md, PROJECT_CONTEXT.md, LEARNING_ROADMAP.md updates, ENGINEERING_STANDARDS.md context note, LEARNINGS.md carry-forward, Phase 0 audit |
 | **Phase 1** | Bronze landing | `scripts/extract_sec_edgar.py`, polite rate limiter, step-up testing (1 → 10 → 100 companies), S3 bucket + IAM, Glue Crawler bootstrap, Bronze verification suite, `EXTRACT_PIPELINE.md`. AWS account creation happens at this phase, not Phase 0. |
-| **Phase 2** | Silver — Data Vault 2.0 | `dbt/` scaffolding (`dbt_project.yml`, `profiles.yml.example`, `packages.yml`, sources), staging models 1:1 with Bronze, intermediate models doing XBRL canonical-concept normalisation, warehouse models for hubs / links / satellites (HAND-ROLLED in plain dbt-athena SQL — AutomateDV does not support Athena per the 2026-05-28 forward-verify pass), schema tests, `DBT_PIPELINE.md` (Silver section). **Known gotcha for satellites** (banked 2026-05-28): Iceberg merge incremental strategy + on_schema_change setting has a duplicate-insertion bug (dbt-adapters issue #571); satellite models must avoid on_schema_change and carefully control unique_key composition (hub_hashkey + load_datetime), with parity-count verification after every satellite refresh. |
+| **Phase 2** | Silver — Data Vault 2.0 (Raw Vault + Business Vault) | `dbt/` scaffolding (`dbt_project.yml`, `profiles.yml.example`, `packages.yml`, sources), staging models 1:1 with Bronze, intermediate models doing XBRL canonical-concept normalisation, **Raw Vault** models for hubs / links / satellites (HAND-ROLLED in plain dbt-athena SQL — AutomateDV does not support Athena per the 2026-05-28 forward-verify pass), **Business Vault** PIT + Bridge tables (Scalefree-canonical query-acceleration + audit-snapshot layer between Raw Vault and Phase 4 marts), schema tests, `DBT_PIPELINE.md` (Silver section). Scope locked at 11 sessions (2026-05-28): sessions 1-3 scaffolding + staging + intermediate; sessions 4-8 Raw Vault hubs/links/sats already shipped (5 hubs + 2 links + 3 sats); session 9 sat_concept_canonical (multi-active sat for raw-tag audit lineage); session 10 Business Vault PIT + Bridge; session 11 Phase 2 close (boundary audit + Phase 3 forward-verify + dbt-runtime decision). **Known gotcha for satellites** (banked 2026-05-28): Iceberg merge incremental strategy + on_schema_change setting has a duplicate-insertion bug (dbt-adapters issue #571); satellite models must avoid on_schema_change and carefully control unique_key composition (hub_hashkey + load_datetime), with parity-count verification after every satellite refresh. |
 | **Phase 3** | Step Functions orchestration | `stepfunctions/state_machine.json`, IAM execution role, on-demand trigger (no schedule per demo-durability principle 2), `ORCHESTRATION_PIPELINE.md`. **First session = forward-verify pass + dbt-runtime decision** (added 2026-05-28): Step Functions has no native dbt integration; dbt-athena must be invoked from Step Functions via one of three runtimes — Glue Python Shell (preferred, lowest IAM expansion), Lambda Container Image (fallback if Glue has dbt-specific issues), or ECS Fargate (cleanest container model, highest deployment overhead). Decision locks at Phase 3 kickoff. Step Functions otherwise integrates natively with Athena (StartQueryExecution / GetQueryExecution) for direct Athena query orchestration. |
 | **Phase 4** | Gold marts + forecasting | 4 mart models in dbt, `scripts/forecast.py` producing Parquet for `mart_growth_forecast`, mart-shape smoke test against Power BI for EACH mart at creation time (Project #2 carry-forward), `GOLD_MARTS_PIPELINE.md`, `DBT_PIPELINE.md` (Gold section) |
 | **Phase 5** | Power BI | 5-page `.pbix` (executive overview + 4 themed pages), `_Measures` table, explicit DAX measures, continuous publish to git, theme picked early, `POWERBI_PIPELINE.md` |
