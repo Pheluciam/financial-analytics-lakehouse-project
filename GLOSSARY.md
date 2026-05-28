@@ -218,6 +218,56 @@ Star = denormalised dims, fewer joins, faster reads, more storage. Snowflake-sch
 
 ---
 
+### Data Vault 2.0 (the second major modelling pattern) `[Project 3]`
+
+The contrast to Kimball. Where a Kimball star schema optimises for analyst comprehension and BI-tool query speed, Data Vault 2.0 optimises for **audit lineage, restatement handling, and parallel loadability**. Hubs hold immutable business keys, satellites append on-change rather than overwrite, links record relationships with their own history. The shape is naturally insert-only across the board — nothing in the raw vault is ever updated in place.
+
+**In this project:** Used as the Silver-layer warehouse pattern in Project #3 (`financial-analytics-lakehouse-project`) — SEC EDGAR data lands raw to Bronze, gets reconciled to canonical XBRL concepts at the intermediate layer, then modelled as a DV2.0 raw vault (hubs / links / satellites) before being denormalised into Gold marts for Power BI. Hand-rolled in plain dbt-athena SQL — no AutomateDV macros, since AutomateDV doesn't support Athena.
+
+**Why both patterns matter:** DV2.0 isn't a rival to Kimball — it's an intermediate layer that feeds Kimball-shaped marts. The lake holds the audit-grade DV2.0; analysts see the BI-shaped star schema. Different jobs, different layers.
+
+### **Hub** `[Project 3]`
+
+The unique-business-key table at the heart of a Data Vault 2.0 model. One row per unique entity instance, immutable on subsequent loads. Records "we first observed this business key at this time from this source." No descriptive attributes (those live on satellites); no relationships (those live on links). Insert-only by construction — re-seeing the same business key never updates the existing hub row.
+
+**In this project:** `hub_company` (Phase 2 session 4) — one row per S&P 100 cik. Hash key column is `hub_company_hk` (SHA-256 of the business key); satellites and links reference this hash, not the cik itself.
+
+### **Link** `[Project 3]`
+
+A Data Vault 2.0 table recording relationships between two or more hubs. One row per unique combination of hub hash keys (e.g., `link_company_filing` = one row per (cik, accession_number) pair). Also insert-only — relationship history accumulates rather than being overwritten. Composite hash key built from the participating hub hash keys.
+
+**Coming in this project:** `link_company_filing` (Phase 2 session 5+).
+
+### **Satellite** `[Project 3]`
+
+A Data Vault 2.0 table holding the descriptive attributes of a parent hub or link, with SCD-2 history native to the pattern. New row inserted when any tracked attribute changes (driven by a hash-diff comparison between the latest stored satellite row and the inbound row for the same parent). The primary key is composite — `(parent_hash_key, load_datetime)` — and a single hub or link can have many satellites split by source or change frequency.
+
+**Coming in this project:** `sat_company_metadata` (company name, sector, SIC code, address); `sat_filing_metadata` (filing date, form type, accession URL); `sat_concept_value` (the actual XBRL fact values); Phase 2 session 6+.
+
+### **Hash key** (Data Vault) `[Project 3]`
+
+A deterministic hash of the business key column(s) of a hub, computed at load time and used as the hub's primary key. The same business key always produces the same hash — which is what makes the hub portable, parallel-loadable (any process given the same input produces the same hash without coordination), and the satellite/link join graph deterministic. MD5 (128-bit) is AutomateDV's and Scalefree's default; SHA-256 (256-bit) is the lower-collision option for users who want it.
+
+**In this project:** SHA-256 picked over MD5 at the Phase 2 session 4 forward-verify pass. Hand-rolled via Athena native functions: `to_hex(sha256(to_utf8(CAST(cik AS varchar))))`. See LEARNINGS Risk 4 (banked 2026-05-28) for the algorithm-choice rationale and `DBT_PIPELINE.md` section 8.4 for the function-chain walkthrough.
+
+### **Business key** (Data Vault context) `[Project 3]`
+
+The natural identifier of the entity in the source system — cik for a company, accession_number for an SEC filing, ISIN for a security. Same concept as Kimball's [natural key](#natural-key-business-key) but used in DV2.0 vocabulary to emphasise its role as the input to the hash function and the immutable identity that anchors the hub.
+
+### **`load_datetime`** (LDTS) `[Project 3]`
+
+The Data Vault 2.0 audit-lineage column recording when a row was first inserted into the warehouse. UTC by convention, stored as a high-precision timestamp (typically `timestamp(6)` — microsecond precision). On hubs: immutable, records first observation. On satellites: part of the composite primary key, increments with each attribute change. The shape of `load_datetime` history IS the audit lineage that the whole DV2.0 pattern exists to preserve.
+
+**In this project:** `CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp(6))` on hub insert. Explicit UTC strip avoids timestamp-with-timezone ambiguity in downstream cross-tool queries.
+
+### **`record_source`** (RSRC) `[Project 3]`
+
+The Data Vault 2.0 audit-lineage column recording which source system / dataset a row was first seen in. String identifier like `'sec_edgar.companyfacts'` or `'erp.customers'`. Becomes meaningful when a single hub is fed from multiple sources (e.g., a company hub fed by SEC EDGAR + an internal CRM + a third-party data provider) — `record_source` says which source first observed each business key, even if subsequent loads come from elsewhere.
+
+**In this project:** Constant `'sec_edgar.companyfacts'` on every hub_company row this session (single source). Becomes more interesting when a second source joins the lake.
+
+---
+
 ## 3. SQL & Database Concepts
 
 ### **DDL** (Data Definition Language)
@@ -1407,6 +1457,7 @@ The three dimension tables of the warehouse layer. Surrogate keys via `dbt_utils
 | **ACID**   | Atomicity, Consistency, Isolation, Durability  | [SQL](#3-sql--database-concepts)                                       |
 | **AD**     | Active Directory (Microsoft)                   | [Security](#14-security--iam)                                          |
 | **AWS**    | Amazon Web Services                            | [Snowflake](#4-snowflake)                                              |
+| **BK**     | Business Key (Data Vault)                      | [Dim Modelling](#2-dimensional-modelling)                              |
 | **BI**     | Business Intelligence                          | [Power BI](#11-power-bi--bi-concepts)                                  |
 | **CA**     | Certificate Authority                          | [Security](#14-security--iam)                                          |
 | **CD**     | Continuous Deployment / Delivery               | [CI/CD](#13-cicd--devops)                                              |
@@ -1419,12 +1470,15 @@ The three dimension tables of the warehouse layer. Surrogate keys via `dbt_utils
 | **DDL**    | Data Definition Language                       | [SQL](#3-sql--database-concepts)                                       |
 | **DE**     | Data Engineering / Data Engineer               | —                                                                      |
 | **DML**    | Data Manipulation Language                     | [SQL](#3-sql--database-concepts)                                       |
+| **DV2.0**  | Data Vault 2.0                                 | [Dim Modelling](#2-dimensional-modelling)                              |
 | **ELT**    | Extract, Load, Transform                       | [DE Core](#1-data-engineering-core)                                    |
 | **ETL**    | Extract, Transform, Load                       | [DE Core](#1-data-engineering-core)                                    |
 | **GCP**    | Google Cloud Platform                          | [Snowflake](#4-snowflake)                                              |
 | **HTTPS**  | HTTP Secure (HTTP over TLS)                    | [Security](#14-security--iam)                                          |
 | **IAM**    | Identity and Access Management                 | [Security](#14-security--iam)                                          |
 | **IDE**    | Integrated Development Environment             | [Python](#8-python-ecosystem)                                          |
+| **HK**     | Hash Key (Data Vault)                          | [Dim Modelling](#2-dimensional-modelling)                              |
+| **LDTS**   | Load Date Timestamp (Data Vault)               | [Dim Modelling](#2-dimensional-modelling)                              |
 | **LTZ**    | Local Time Zone (Snowflake variant)            | [Snowflake](#4-snowflake)                                              |
 | **MDM**    | Master Data Management                         | —                                                                      |
 | **NTZ**    | No Time Zone (Snowflake variant)               | [Snowflake](#4-snowflake)                                              |
@@ -1434,6 +1488,7 @@ The three dimension tables of the warehouse layer. Surrogate keys via `dbt_utils
 | **PII**    | Personally Identifiable Information            | [Security](#14-security--iam)                                          |
 | **PR**     | Pull Request (GitHub)                          | [Git](#9-git--github)                                                  |
 | **RBAC**   | Role-Based Access Control                      | [Security](#14-security--iam)                                          |
+| **RSRC**   | Record Source (Data Vault)                     | [Dim Modelling](#2-dimensional-modelling)                              |
 | **S&OP**   | Sales and Operations Planning                  | [Project 2](#15-project-specific-terms-project-2)                      |
 | **SCD**    | Slowly Changing Dimension                      | [Dim Modelling](#2-dimensional-modelling)                              |
 | **SHA**    | Secure Hash Algorithm (used in Git commit IDs) | [Git](#9-git--github)                                                  |

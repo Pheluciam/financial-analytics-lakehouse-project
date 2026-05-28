@@ -331,6 +331,40 @@ These aren't diagnosis-fix-lesson loops — the issues haven't bitten yet. They'
 
 **Mitigation going into PROJECT_PLAN.md section 9 Phase 3 entry.** Explicit design call documented up front: "Phase 3 first session = forward-verify pass + dbt-runtime choice between Glue Python Shell (preferred) and Lambda Container Image (fallback)." No surprise mid-phase.
 
+#### Risk 4 — Hash-key algorithm choice (MD5 vs SHA-256) and hand-rolled vs dbt_utils for DV2.0 hubs (banked 2026-05-28, Phase 2 session 4 kickoff forward-verify)
+
+**Verified against authoritative sources.** Scalefree (canonical Data Vault 2.0 reference body — scalefree.com/blog/architecture/hash-keys-in-the-data-vault/) lists MD5 (128-bit) and SHA-1 (160-bit) as current recommended defaults for DV2.0 hash keys, with SHA-256 explicitly available for users who want lower collision rates on large data sets. AutomateDV's hashing docs (automate-dv.readthedocs.io/en/latest/best_practises/hashing/) expose `md5` / `sha1` / `sha` (= SHA-256) as configurable. `dbt_utils.generate_surrogate_key()` (github.com/dbt-labs/dbt-utils generate_surrogate_key.sql) uses MD5 cross-adapter via adapter dispatch and IS compatible with dbt-athena. Athena's Trino-based engine v3 (docs.aws.amazon.com/athena/latest/ug/functions-env3.html) exposes native `sha256()` returning varbinary + `to_hex()` for the hex-string conversion.
+
+**Implication.** Two defensible design paths for hub_company's hub_company_hk:
+
+| Path | Pros | Cons |
+|---|---|---|
+| **`dbt_utils.generate_surrogate_key(['cik'])`** | Ecosystem-standard, one-liner, cross-adapter portable, matches Scalefree's MD5-by-default recommendation | Hides the hash mechanic behind a macro — weaker portfolio story for "I hand-rolled DV2.0 on Athena" |
+| **Hand-rolled Athena native: `to_hex(sha256(to_utf8(cast(cik as varchar))))`** | Demonstrates engine-fluent SQL + DV2.0 mechanic understanding, aligns with the "hand-rolled, no AutomateDV" lock (Risk 1), SHA-256 lower collision rate (irrelevant at S&P 100 = 100 rows but matters for the portfolio narrative around future-scale design) | Verbose vs the macro one-liner; collision-rate argument is theoretical at this scale |
+
+**Decision (locked at this forward-verify pass).** Hand-rolled `to_hex(sha256(to_utf8(cast(<bk> as varchar))))` is the project standard for all DV2.0 hash keys (hub_company_hk, future hub_filing_hk, link hash keys, satellite parent hash key references). Rationale: consistency with the "hand-rolled DV2.0, no AutomateDV" lock from Risk 1 — using `dbt_utils.generate_surrogate_key()` for the hash while hand-rolling everything else would be inconsistent. SHA-256 over MD5 because the portfolio story is "I understand DV2.0 mechanics deeply enough to pick a higher-strength hash deliberately even at small scale, knowing the perf trade-off is negligible at S&P 100 volumes." Document the design call in DBT_PIPELINE.md section 8 so the choice is auditable.
+
+**Carry-forward principle.** When the choice is between a cross-adapter macro and an engine-native expression in a portfolio project, the engine-native expression usually wins because it demonstrates depth. The macro wins in production at scale where consistency across pipelines matters more than the artifact's pedagogical surface.
+
+#### Risk 5 — dbt-athena Iceberg merge strategy OVERWRITES matched rows by default; DV2.0 hubs need insert-only semantics (banked 2026-05-28, Phase 2 session 4 kickoff forward-verify)
+
+**Verified against authoritative source.** docs.getdbt.com/reference/resource-configs/athena-configs + docs.getdbt.com/docs/build/incremental-strategy — for `incremental_strategy='merge'` on Iceberg with `unique_key` set, dbt's default behavior is to OVERWRITE matched rows with new values. Optional configs to constrain the merge: `update_condition` (SQL identifying which matched rows update), `insert_condition` (SQL identifying which not-matched rows insert), `merge_update_columns` (whitelist of columns to update — leave empty to update nothing). dbt-athena docs confirm same behavior on Athena Iceberg merge. dbt-athena merge requires Athena engine v3, which wg_financial_analytics already runs.
+
+**Implication.** Data Vault 2.0 hubs are INSERT-ONLY by definition — a business key (cik) entering the hub once is immutable forever. The hub row records "we first observed cik X at load_datetime Y from record_source Z." Re-seeing the same cik in a later load must NOT update load_datetime (corrupts the first-seen audit trail) and must NOT insert a duplicate (violates hub primary-key uniqueness). dbt-athena's default merge behavior would overwrite load_datetime + record_source on every refresh of hub_company — silently corrupting the lineage that's the whole point of DV2.0.
+
+**Mitigations — pick ONE pattern, document in DBT_PIPELINE.md section 8.**
+
+| Pattern | How | When to pick |
+|---|---|---|
+| **Source-side filter + merge with unique_key** | In the model body, wrap the source SELECT in an `{% if is_incremental() %}` block that filters to `WHERE hub_company_hk NOT IN (SELECT hub_company_hk FROM {{ this }})`. The merge then has nothing to match on — every row in source is genuinely new. unique_key acts as a safety net at the engine level. | **Recommended.** Cleanest DV2.0 hub pattern — semantics match how an experienced DV2.0 modeler explains it ("source already excludes seen-before keys; merge unique_key guards the contract"). Matches AutomateDV's hub generator output structurally. |
+| **`update_condition: '1 = 0'`** | Pass an always-false SQL predicate that excludes every matched row from update. Engine still scans matched rows but no-ops the update. | Works but less idiomatic — the literal `1 = 0` reads as a hack vs an explicit source-side filter that says what it means. |
+| **`merge_update_columns: []`** | Empty whitelist tells dbt to update no columns. | Same effect as above; same readability complaint. |
+| **`incremental_strategy='append'`** | Skip merge entirely. Naive append. | REJECTED — append has no unique-key safety net; a duplicated source row inserts a duplicated hub row, corrupting the hub. |
+
+**Decision (locked at this forward-verify pass).** Pattern 1 — source-side filter + merge with unique_key. The `is_incremental()` block reads as DV2.0-idiomatic; the unique_key safety net at the engine level satisfies criterion 9 (post-action verification belt-and-braces). Cross-link to Risk 2 (banked 2026-05-28): on_schema_change stays at default `ignore` for hub_company — hubs are schema-stable by construction (hash key + business key + load_datetime + record_source).
+
+**Carry-forward principle.** dbt's incremental defaults are tuned for analytics-engineering upsert patterns (overwrite latest values), NOT for audit-lineage patterns like DV2.0 hubs/links/satellites. Every DV2.0 model on dbt-athena (hub, link, sat) must explicitly state its insert-only / SCD-2 contract through model-body filters + targeted merge conditions, not by trusting defaults. The same source-side filter pattern carries to future hub_filing, link_company_filing; satellites get a different pattern (SCD-2 insert-on-change keyed on hash diff).
+
 ---
 
 ### Banked open items from session 1 (not lessons, but trackable)

@@ -368,15 +368,185 @@ Trade-off accepted: new S&P 100 turnover requires editing the enum list
 in both Bronze DDLs and re-running DROP+CREATE. Cheap operation; the
 explicit list serves as documentation of "what's in the lake" anyway.
 
-## 8. Warehouse layer — Data Vault 2.0 (Phase 2 session 3+)
+## 8. Warehouse layer — Data Vault 2.0 (Phase 2 session 4 onwards)
 
-(To be expanded in Phase 2 session 3+.)
+### 8.1 What this layer is
 
-Raw vault built from intermediate via dbt-athena Iceberg models. Hubs
-hold business keys; links hold relationships; satellites hold descriptive
-attributes with full SCD-2 history. Iceberg's `merge` incremental
-strategy is the natural fit for satellite history (insert new rows on
-attribute change; never overwrite).
+The warehouse layer is the project's Data Vault 2.0 raw vault — hubs
+holding unique business keys, links holding relationships between hubs,
+satellites holding descriptive attributes with full SCD-2 history. It
+sits between the canonical Silver intermediate layer (where XBRL concept
+heterogeneity is reconciled to canonical names) and the Gold marts that
+power Power BI consumption in Phase 4.
+
+DV2.0 separates immutable business keys from mutable descriptive context
+by construction — hubs are insert-only forever, satellites append
+on-change rather than overwrite, links record relationship history. That
+shape gives the lake natural audit lineage (every change is inspectable
+through satellite version history) and natural restatement handling (a
+corrected 10-K/A doesn't overwrite the original 10-K filing — both
+versions live alongside, distinguishable by load_datetime).
+
+### 8.2 Hand-rolled, no third-party DV2.0 macros
+
+Locked at Phase 2 session 3 close-amend (2026-05-28) after the
+phase-kickoff forward-verify pass: every DV2.0 model in this project is
+written in plain dbt-athena SQL with no third-party macros. AutomateDV
+(formerly dbtvault) is the dominant DV2.0 macro package in the dbt
+ecosystem but does NOT support Athena per its platform support page —
+only Snowflake, BigQuery, MS SQL Server, Databricks, Postgres are on
+the supported list. See LEARNINGS Risk 1 (banked 2026-05-28) for the
+full source-verification chain.
+
+The portfolio story is stronger for hand-rolled regardless. A recruiter
+who sees `{{ dbtvault.hub(...) }}` macro calls learns that the candidate
+typed a macro and trusted it. A recruiter who sees hand-rolled hub SQL
+with the hash key built from `to_hex(sha256(to_utf8(...)))` learns that
+the candidate understands the DV2.0 mechanic — what a hash key is, why
+it's deterministic, how insert-only semantics protect audit lineage,
+what the unique_key contract guards against.
+
+### 8.3 First hub: hub_company
+
+`dbt/models/warehouse/hub_company.sql` is the first hub. Business key =
+SEC Central Index Key (cik) — the 10-digit zero-padded identifier SEC
+assigns to every filer. One row per unique cik across the S&P 100
+universe. Records the first observation of each company in the lake;
+load_datetime is immutable on subsequent refreshes.
+
+**Source = staging, not canonical.** The model reads from
+`stg_sec_edgar__companyfacts` rather than `int_sec_edgar__concepts_canonical`.
+Staging has one row per (cik, extract_date) across all 100 S&P CIKs;
+canonical filters to CIKs with at least one in-scope XBRL concept and
+could silently under-populate the hub if a given company reported none
+of the 8 in-scope tags. The DV2.0 lineage rule — hubs source from the
+rawest layer where the business key first appears — is satisfied by
+the staging read.
+
+### 8.4 Hash key — hand-rolled SHA-256
+
+The hub primary key is a SHA-256 hash of the business key, hex-encoded:
+
+```sql
+to_hex(sha256(to_utf8(CAST(cik AS varchar)))) AS hub_company_hk
+```
+
+`to_utf8()` converts the varchar input to varbinary (Trino's `sha256()`
+requires varbinary input); `sha256()` returns a 32-byte digest as
+varbinary; `to_hex()` encodes those 32 bytes as 64 hex characters. The
+defensive `CAST(cik AS varchar)` guards against future staging-side
+type changes silently breaking the hash.
+
+SHA-256 over MD5 (AutomateDV's and Scalefree's default) is a deliberate
+choice — collision rate is theoretical at S&P 100 scale, but picking
+SHA-256 despite that signals "I understand the trade-offs and chose the
+higher-strength option knowingly," which is the portfolio artifact's
+narrative job. See LEARNINGS Risk 4 (banked 2026-05-28) for the full
+verification chain against Scalefree, AutomateDV, and the Athena engine
+v3 functions reference.
+
+The same hash function chain extends unchanged to future single-key
+hubs (hub_filing on accession_number, hub_concept on canonical_concept,
+hub_period on period_end_date). Multi-column composite-key hubs (none
+in scope yet for Project #3) would concatenate the business-key columns
+with an explicit delimiter before hashing, to avoid the ambiguity where
+'AB' + 'C' and 'A' + 'BC' produce the same digest.
+
+### 8.5 Insert-only semantics via source-side filter
+
+dbt-athena's default Iceberg merge strategy OVERWRITES matched rows
+with new values — the standard analytics-engineering upsert pattern.
+For DV2.0 hubs that default is wrong: re-seeing the same cik on a
+subsequent extract would overwrite the original load_datetime and
+record_source, silently corrupting the first-seen audit trail that is
+the whole point of the hub.
+
+The fix is a source-side `is_incremental()` filter that excludes
+already-seen hash keys before the engine reaches the merge:
+
+```sql
+SELECT * FROM hashed
+{% if is_incremental() %}
+WHERE hub_company_hk NOT IN (SELECT hub_company_hk FROM {{ this }})
+{% endif %}
+```
+
+On the first run, `is_incremental()` is false (no `{{ this }}` exists
+yet) — the whole source flows through as CREATE TABLE AS SELECT. On
+subsequent runs, `is_incremental()` is true — the source SELECT excludes
+every cik already in the hub, so the merge has nothing to match against
+and only ever inserts genuinely-new keys. The `unique_key='hub_company_hk'`
+config provides a belt-and-braces safety net at the engine level — if
+the source-side filter ever fails to dedupe (broken upstream, bug in
+the model), the merge would still refuse to insert a duplicate hash.
+See LEARNINGS Risk 5 (banked 2026-05-28) for the alternatives considered
+and rejected (`update_condition: '1 = 0'`, `merge_update_columns: []`,
+`incremental_strategy: 'append'`) and the rationale chain.
+
+Layer defaults (`materialized: incremental`, `incremental_strategy: merge`,
+`table_type: iceberg`, `format: parquet`, `on_schema_change: ignore`)
+live in `dbt_project.yml` under the warehouse block — all three DV2.0
+model classes (hubs, links, satellites) share those defaults. Only the
+per-model `unique_key` lives in each model's own config block, since
+the hash-key column name varies (`hub_company_hk`, `link_company_filing_hk`,
+`sat_company_metadata_hk`, etc.). `on_schema_change` stays at `ignore`
+project-wide for the warehouse layer because the Iceberg merge +
+`on_schema_change=sync_all_columns` combination has a documented
+duplicate-insertion bug (LEARNINGS Risk 2, dbt-glue issue #571). DV2.0
+hubs and links are schema-stable by construction; satellites evolve
+schema via full-refresh when needed, not via on_schema_change.
+
+### 8.6 Verification surface for the warehouse layer
+
+Three layers of verification, each catching a different class of issue:
+
+**Schema tests** (`dbt/models/warehouse/_models.yml`): 6 tests on
+hub_company — `not_null` on every column (hub_company_hk, cik,
+load_datetime, record_source) plus `unique` on hub_company_hk AND cik.
+Unique on the business key is the hub uniqueness contract; unique on
+the hash key is its mathematical guarantee. Both tested gives
+belt-and-braces — if one passes and the other fails, the hash function
+chain has a bug.
+
+**Structural verify** (`sql/verify/03_phase2_warehouse_verification.sql`):
+9 PASS/FAIL checks in the same CTE-then-SELECT pattern as verify/01
+and verify/02. Covers: row count = 100 (S&P 100 parity), hash-key
+uniqueness restated in raw SQL, hash-key length = 64 chars (SHA-256
+structural contract), business-key uniqueness restated in raw SQL,
+hub count = source distinct CIK count (lineage parity vs staging),
+Apple hash deterministic-reproducibility check (recomputes
+`to_hex(sha256(to_utf8('0000320193')))` and confirms the stored hash
+matches — proves the hash function chain is reproducible and the model
+wrote the expected value), load_datetime within reasonable UTC bounds,
+record_source constant for every row. 9/9 PASS in 4.461 sec, ~41 KB
+scanned at session 4 close.
+
+**Idempotency proof** (separate dbt re-run): running `dbt run --select
+hub_company` a second time returns `OK 0 in 27.00s` — the merge query
+executes but inserts 0 rows because the source-side filter excluded
+all 100 already-seen hash keys. The "0 rows" line IS the insert-only
+contract demonstrating in production.
+
+### 8.7 Pattern reusability — what carries to future warehouse models
+
+The first hub establishes patterns subsequent warehouse models inherit
+structurally:
+
+- **Hash function chain** (`to_hex(sha256(to_utf8(CAST(<bk> AS varchar))))`)
+  is the project standard for every hash key in every DV2.0 model.
+- **Source-side `is_incremental()` filter** carries to hub_filing,
+  hub_concept, hub_period — identical pattern with the appropriate
+  hash-key column name.
+- **Links** apply the same source-side filter pattern; the difference
+  is the SELECT body computes a composite hash over multiple business
+  keys (e.g., `link_company_filing_hk` over cik + accession_number).
+- **Satellites** use a different filter pattern (insert-on-change keyed
+  on hash diff between the inbound row and the latest satellite version
+  for the same parent), but the merge config, hash function, and
+  `on_schema_change: ignore` defaults all carry unchanged.
+- **Verify-suite pattern** (CTE PASS/FAIL with `check_NN_<name>` naming)
+  carries verbatim — each future warehouse model gets its own
+  `sql/verify/NN_...sql` file in the same shape.
 
 ## 9. Verification surface (per session)
 

@@ -68,9 +68,20 @@ clean-targets:
 #   partition-projection-vs-test pattern conflict). See LEARNINGS entry
 #   "Bronze cik partition projection type=injected blocks schema-test
 #   scans" for the diagnosis loop.
-# warehouse — iceberg table: Data Vault 2.0 hubs/links/satellites need ACID
-#   merge for SCD-2 satellite history (only available with Iceberg).
-#   TO ADD: Phase 2 session 3+ when first hub/link/satellite lands.
+# warehouse — iceberg incremental + merge: Data Vault 2.0 hubs / links /
+#   satellites. ACID merge (Iceberg-only) is the natural fit for hub
+#   insert-only semantics, link insert-only semantics, and satellite
+#   SCD-2 insert-on-change. All three model classes share the same
+#   layer defaults (incremental + merge + iceberg + parquet +
+#   on_schema_change=ignore); the per-model unique_key differs by
+#   class and lives in each model's own config block. on_schema_change
+#   stays at ignore project-wide for the warehouse layer because the
+#   Iceberg merge + on_schema_change=sync_all_columns combination has
+#   a documented duplicate-insertion bug (LEARNINGS Risk 2 banked
+#   2026-05-28; dbt-glue issue #571 + dbt-adapters related). DV2.0
+#   hubs/links are schema-stable by construction; satellites evolve
+#   schema via full-refresh-when-needed, not via on_schema_change.
+#   ACTIVE: Phase 2 session 4 onwards (first hub: hub_company).
 # marts — iceberg table: Gold marts persisted for Power BI consumption.
 #   TO ADD: Phase 4 when first mart lands.
 #
@@ -91,6 +102,12 @@ models:
       +materialized: table
       +table_type: iceberg
       +format: parquet
+    warehouse:
+      +materialized: incremental
+      +incremental_strategy: merge
+      +table_type: iceberg
+      +format: parquet
+      +on_schema_change: ignore
 
 # Seed defaults — version-controlled reference CSVs under seeds/.
 # Phase 2 session 3 onwards. Materializes as Parquet on S3 via the

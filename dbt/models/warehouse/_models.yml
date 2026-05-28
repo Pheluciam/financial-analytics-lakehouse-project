@@ -1,0 +1,69 @@
+# Warehouse-layer (Data Vault 2.0) model contracts.
+#
+# Documents the upstream/downstream contract per ENGINEERING_STANDARDS
+# criterion 7. Schema tests run via `dbt test`; the structural verify
+# suite at sql/verify/03_phase2_warehouse_verification.sql complements
+# schema tests with idempotency + parity checks the YAML can't express.
+#
+# Hash-key + business-key uniqueness on hub models is the foundational
+# DV2.0 contract — every downstream link / satellite / mart joins on
+# hub_<entity>_hk; a duplicate hash silently corrupts the join graph.
+
+version: 2
+
+models:
+  - name: hub_company
+    description: |
+      Data Vault 2.0 hub for the company entity. One row per unique
+      SEC Central Index Key (cik) — the business key. SHA-256 hash key
+      computed via to_hex(sha256(to_utf8(cast(cik AS varchar)))), stored
+      as hub_company_hk and referenced by every downstream link
+      (l_company_filing) and satellite (s_company_metadata, etc.).
+      Insert-only by construction — load_datetime records the first
+      observation of each cik and is immutable on subsequent refreshes
+      (source-side is_incremental filter excludes seen-before hash keys
+      before the engine-level merge). Materialized as Iceberg via merge
+      incremental strategy; layer defaults in dbt_project.yml warehouse
+      block. Walkthrough: DBT_PIPELINE.md section 8.
+    columns:
+      - name: hub_company_hk
+        description: |
+          SHA-256 hash of the business key (cik), hex-encoded. Stable
+          across loads — the same cik always produces the same hash,
+          which is what makes the hub portable and the join graph
+          deterministic. Primary key of the hub by DV2.0 convention;
+          foreign key target from every link and satellite that points
+          to a company.
+        tests:
+          - not_null
+          - unique
+
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. Business key of
+          the hub — the natural identifier SEC uses for each filer.
+          Inherited from stg_sec_edgar__companyfacts.
+        tests:
+          - not_null
+          - unique
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) recording the first observation of this cik
+          in the warehouse. Set on insert, never updated — the
+          is_incremental source-side filter ensures already-seen
+          hash keys are excluded from subsequent merges. The
+          immutability of this column IS the DV2.0 audit-lineage
+          contract.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          String identifier of the source system / dataset this hub
+          row was first seen in. Constant 'sec_edgar.companyfacts'
+          for every row this session (single source). Becomes more
+          interesting when a second source (e.g., a different SEC
+          endpoint, or a non-SEC company registry) joins the lake.
+        tests:
+          - not_null

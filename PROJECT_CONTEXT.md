@@ -15,10 +15,10 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 2 in progress.** Session 3 CLOSED 2026-05-28 — canonical-concept reconciliation shipped end-to-end, intermediate layer flipped to Iceberg tables, Bronze cik partition projection switched to enum, verification suite 11/11 PASS reconciling Apple's published FY16-FY21 revenues across the ASC 606 alias discontinuity. |
-| Next phase | Phase 2 session 4 — first warehouse-layer Data Vault 2.0 model (hub_company). Reads cik + entity_name from the staging layer; Iceberg merge incremental strategy for future SCD-2 history at the satellite layer. Est. 60-90 min. |
-| Last session closed | 2026-05-28 (Phase 2 session 3 — CLOSE) |
-| Last bundled commit | 2026-05-28 — Phase 2 session 3 bundle (canonical_concepts_dictionary seed + _seeds.yml + dbt_project.yml seeds block; int_sec_edgar__concepts expanded to 8 XBRL tags + period_start_date column; new int_sec_edgar__concepts_canonical model joining the seed; _models.yml extended with column contracts on the new model; sql/verify/02 extended from 6 to 11 checks reconciling Apple FY19-FY21 canonical revenue; intermediate layer flipped to Iceberg tables in dbt_project.yml; Bronze cik partition projection switched type=injected → type=enum on both Bronze table DDLs; 4 new LEARNINGS entries; DBT_PIPELINE.md sections 7.5-7.8 shipped; TEACHING_PREFERENCES.md updated with AWS-identity-naming standing rule) |
+| Active phase | **Phase 2 in progress.** Session 4 CLOSED 2026-05-28 — first warehouse-layer Data Vault 2.0 hub (hub_company) shipped end-to-end with hand-rolled SHA-256 hash key + source-side insert-only filter + Iceberg merge incremental; 6/6 dbt schema tests PASS, 9/9 SQL structural verify PASS, idempotency proven via second-run NO-OP. Two forward-projected risks banked (Risk 4 hash algorithm, Risk 5 hub insert-only semantics) BEFORE code shipped per the new phase-kickoff forward-verify rule. |
+| Next phase | Phase 2 session 5 — first link model (link_company_filing) connecting hub_company to a new hub_filing (accession_number business key). Establishes the link pattern + multi-hub composite hash key + same insert-only-via-source-side-filter semantics as hubs. Est. 60-90 min. |
+| Last session closed | 2026-05-28 (Phase 2 session 4 — CLOSE) |
+| Last bundled commit | 2026-05-28 — Phase 2 session 4 bundle (hub_company.sql + warehouse/_models.yml + dbt_project.yml warehouse-layer defaults block; sql/verify/03 9-check structural verify; DBT_PIPELINE.md section 8 expanded to 7 subsections covering DV2.0 framing, hand-rolled lock, hub_company walkthrough, hash-key construction, insert-only filter, verification surface, pattern reusability for future hubs/links/sats; GLOSSARY.md extended with 7 DV2.0 entries + 5 acronyms; LEARNINGS.md Risks 4 + 5 banked at forward-verify pass; warehouse/.gitkeep removed) |
 | Active blockers | None |
 | Open questions | None at the architectural level. |
 
@@ -88,6 +88,164 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-05-28 — Phase 2 session 4 — first warehouse-layer DV2.0 hub (hub_company) + forward-verify pass + 9/9 structural verify PASS
+
+**Goal.** Ship the first warehouse-layer Data Vault 2.0 model — hub_company,
+business key = SEC CIK. Establish the hand-rolled DV2.0 pattern (no
+AutomateDV) the rest of the warehouse layer (link_company_filing,
+sat_company_metadata, hub_filing, etc.) will follow structurally.
+First activity: the new mandatory phase-kickoff forward-verify pass
+per the ENGINEERING_STANDARDS rule banked at session 3 close-amend.
+
+**Forward-verify pass (NEW — first time the rule applied).** Restricted-domain
+web-search-verify against docs.aws.amazon.com (Athena engine v3 functions,
+Iceberg MERGE INTO semantics), docs.getdbt.com (dbt-athena configs,
+incremental-strategy docs), scalefree.com (canonical DV2.0 reference body),
+automate-dv.readthedocs.io (hashing best practices), github.com/dbt-labs
+(dbt_utils.generate_surrogate_key compatibility, dbt-adapters known issues),
+trino.io (binary functions). Surfaced 2 new forward-projected risks
+BEFORE any SQL shipped — banked in LEARNINGS.md as Risks 4 + 5 on top
+of the 3 from session 3 close-amend. Total time on the pass: ~25 min.
+Earned its keep: both risks informed the model design directly.
+
+**What landed.**
+
+- **`dbt/models/warehouse/hub_company.sql` shipped.** First DV2.0 hub in
+  the project. Business key = cik (10-digit zero-padded SEC Central Index
+  Key). Source = `stg_sec_edgar__companyfacts` (NOT
+  `int_sec_edgar__concepts_canonical` — staging guarantees all 100 S&P
+  CIKs while canonical filters to CIKs with at least one in-scope XBRL
+  concept). 4 columns: hub_company_hk (SHA-256 hash of cik), cik,
+  load_datetime (timestamp(6) UTC), record_source ('sec_edgar.companyfacts').
+- **Hand-rolled SHA-256 hash chain.**
+  `to_hex(sha256(to_utf8(CAST(cik AS varchar))))` — Athena/Trino native
+  engine v3 functions only. Defensive CAST guards against future staging-side
+  type changes. SHA-256 over MD5 (AutomateDV/Scalefree default) is the
+  deliberate portfolio choice — locked at the forward-verify pass.
+  Locks the hash function chain for every future DV2.0 hash key
+  (hub_filing_hk, hub_concept_hk, hub_period_hk, link composite keys,
+  satellite parent-key references).
+- **Insert-only semantics via source-side `is_incremental()` filter.**
+  `WHERE hub_company_hk NOT IN (SELECT hub_company_hk FROM {{ this }})`
+  excludes already-seen hash keys from the source SELECT before the
+  engine reaches the merge — matched rows literally never exist at
+  engine level, so the dbt-athena default merge-overwrites-matched
+  behavior never fires. `unique_key=hub_company_hk` is the
+  belt-and-braces engine-level safety net. Locked at the forward-verify
+  pass — alternatives (`update_condition: '1 = 0'`,
+  `merge_update_columns: []`, `incremental_strategy: 'append'`)
+  considered and rejected; full rationale chain in LEARNINGS Risk 5.
+- **`dbt/models/warehouse/_models.yml` shipped.** Column contracts for
+  every hub_company column: `not_null` x4 (every column), `unique` x2
+  (hub_company_hk AND cik — both the hash and the business key tested
+  for uniqueness; belt-and-braces against hash-function-chain bugs).
+  6 schema tests total.
+- **`dbt_project.yml` warehouse block added.**
+  `+materialized: incremental`, `+incremental_strategy: merge`,
+  `+table_type: iceberg`, `+format: parquet`, `+on_schema_change: ignore`
+  under `models.financial_analytics.warehouse`. Long comment block
+  above explains why `on_schema_change=ignore` is the right project-wide
+  default for ALL DV2.0 model classes (cross-links Risk 2 — the
+  Iceberg merge + on_schema_change=sync_all_columns duplicate-insertion
+  bug). Per-model unique_key stays in each model's own config block since
+  hash-key column name varies across hubs/links/sats.
+- **`sql/verify/03_phase2_warehouse_verification.sql` shipped.** Parallel
+  CTE PASS/FAIL pattern to verify/01 + verify/02. 9 checks: row count =
+  100 (S&P 100 parity), hash-key uniqueness (raw SQL), hash-key not_null
+  (raw SQL), hash-key length = 64 chars (SHA-256 structural contract),
+  cik uniqueness (raw SQL), source-parity vs stg_sec_edgar__companyfacts
+  distinct CIK count (lineage parity), Apple (cik 0000320193) hash
+  deterministic-reproducibility check (recomputes
+  `to_hex(sha256(to_utf8('0000320193')))` and confirms stored hash
+  matches), load_datetime within reasonable UTC bounds, record_source
+  constant 'sec_edgar.companyfacts'. 9/9 PASS in 4.461 sec, ~41 KB scanned.
+- **DBT_PIPELINE.md section 8 expanded** from 4-line stub to 7 subsections:
+  8.1 what this layer is (DV2.0 framing), 8.2 hand-rolled lock (no
+  AutomateDV), 8.3 first hub: hub_company (design + source choice),
+  8.4 hash key construction (the function chain walkthrough), 8.5
+  insert-only semantics via source-side filter (the alternatives table
+  + rationale), 8.6 verification surface (3-layer: schema tests +
+  structural verify + idempotency proof), 8.7 pattern reusability for
+  future warehouse models.
+- **GLOSSARY.md extended.** 7 new DV2.0 entries added at the end of
+  section 2 (Dimensional Modelling): Data Vault 2.0 framing entry +
+  Hub + Link + Satellite + Hash key + Business key (DV2.0 context) +
+  load_datetime (LDTS) + record_source (RSRC). 5 new acronyms added to
+  the table: BK, DV2.0, HK, LDTS, RSRC. All tagged `[Project 3]`.
+- **LEARNINGS.md** — 2 forward-projected risks banked at the kickoff
+  forward-verify pass (BEFORE any code shipped, per the new rule):
+  Risk 4 (hash algorithm choice MD5 vs SHA-256 + hand-rolled vs
+  dbt_utils trade-off), Risk 5 (dbt-athena Iceberg merge overwrites
+  matched rows by default; DV2.0 hubs need insert-only semantics).
+  Both with verified-against-authoritative-source provenance + locked
+  design decision + carry-forward principle.
+- **`dbt/models/warehouse/.gitkeep` removed.** Stale placeholder per
+  ENGINEERING_STANDARDS phase-boundary structural audit (now that
+  warehouse has real models).
+
+**Verification surface at session 4 close.**
+
+- 6/6 dbt schema tests PASS (not_null x4 + unique x2)
+- 9/9 SQL structural verify PASS (4.461 sec, ~41 KB scanned)
+- 2 dbt runs back-to-back: first PASS=1 in 16 sec (CREATE TABLE AS),
+  second PASS=1 in 27 sec with `OK 0` rows merged (idempotency proven)
+- `dbt parse` clean (0 errors, 0 warnings)
+
+**Decisions locked this session (at the forward-verify pass).**
+
+- **DV2.0 hash function chain = SHA-256 hand-rolled via
+  `to_hex(sha256(to_utf8(CAST(<bk> AS varchar))))`.** Athena/Trino
+  native, no third-party macros. Project standard for every hash key
+  in every future DV2.0 model (hubs, links, satellites).
+- **Hub insert-only pattern = source-side `is_incremental()` filter +
+  `unique_key` as engine-level safety net.** Project standard for every
+  hub and link going forward. Satellites use a different filter pattern
+  (hash-diff insert-on-change) but the same merge config + on_schema_change
+  defaults.
+- **Warehouse layer defaults = incremental + merge + iceberg + parquet +
+  on_schema_change=ignore.** Shared by all three DV2.0 model classes.
+  Per-model unique_key stays in each model's own config block.
+- **DV2.0 hubs source from the rawest layer where the business key
+  first appears** (staging, not canonical/intermediate). Lineage rule
+  baked in from day 1.
+
+**Blockers / surprises.** None. The forward-verify pass front-loaded
+every architectural decision that would otherwise have surfaced mid-build.
+First end-to-end PASS on first try at every step (dbt parse → dbt run →
+dbt test → second dbt run → SQL verify). 0 in-session debug loops —
+the verify pass paid for itself.
+
+**NOT in this session — deferred.**
+
+- **First DV2.0 link (link_company_filing) + hub_filing** → Phase 2
+  session 5. Establishes the link pattern + multi-hub composite hash
+  key + same insert-only semantics. Composite key: cik || '||' || accession_number
+  hashed (the '||' delimiter avoids the 'AB'+'C' = 'A'+'BC' digest-collision
+  ambiguity).
+- **First DV2.0 satellite (sat_company_metadata)** → Phase 2 session 6+.
+  Different filter pattern (hash-diff insert-on-change) but same merge
+  config + on_schema_change defaults.
+- **README.md Status line refresh** → Phase 2 close (per session 3 close
+  deferral). Will bump from "Phase 1 complete" to "Phase 2 complete"
+  once all hubs/links/sats land.
+- **AWS Glue Catalog re-crawl of warehouse layer** → not needed; dbt-athena
+  registered the hub_company table at dbt run time, visible in the Glue
+  Console under `financial_analytics_silver`.
+
+**Next session.** Phase 2 session 5 — first link model + second hub.
+First activity = phase-kickoff forward-verify pass (this is now
+standard for every phase kickoff — verify pass should also re-fire
+when introducing a new architectural pattern mid-phase, per
+ENGINEERING_STANDARDS). Scope: hub_filing (accession_number business
+key, sourced from a Bronze submissions endpoint extract — note: only
+Bronze companyfacts is landed currently; may need to extend Phase 1
+extract OR derive accession_number from companyfacts JSON if available).
+Then link_company_filing connecting the two hubs via composite hash.
+Est. 60-90 min for forward-verify pass + hub_filing + link_company_filing
++ verify suite.
+
+---
 
 ### 2026-05-28 — Phase 2 session 3 — canonical-concept reconciliation + intermediate-as-Iceberg + Bronze enum switch + verification 11/11 PASS
 
@@ -911,7 +1069,7 @@ full-100 scale-up.
 
 ---
 
-## Files in the project (Phase 2 session 3 close inventory — 2026-05-28)
+## Files in the project (Phase 2 session 4 close inventory — 2026-05-28)
 
 Doc-shaped:
 
@@ -922,9 +1080,10 @@ Doc-shaped:
 - `TEACHING_PREFERENCES.md` ✓ (Phase 2 session 1 — third re-lock on paste-able discipline)
 - `ENGINEERING_STANDARDS.md` ✓
 - `GLOSSARY.md` ✓
-- `LEARNINGS.md` ✓ (23 Project #3 entries — 10 sessions 1-3 + 3 session 4 + 4 Phase 2 session 1 + 2 Phase 2 session 2 + 4 Phase 2 session 3)
+- `LEARNINGS.md` ✓ (25 Project #3 entries — 10 sessions 1-3 + 3 session 4 + 4 Phase 2 session 1 + 2 Phase 2 session 2 + 4 Phase 2 session 3 + 2 Phase 2 session 4 forward-projected risks 4 + 5)
 - `EXTRACT_PIPELINE.md` ✓ (Phase 1 walkthrough — frozen at Phase 1 close)
-- `DBT_PIPELINE.md` ✓ (Phase 2 session 3 — sections 1-7.8, 9, 10 shipped; section 8 expands at Phase 2 session 4+)
+- `DBT_PIPELINE.md` ✓ (Phase 2 session 4 — sections 1-7.8 + 8.1-8.7 + 9 + 10 shipped; section 8 expanded from 4-line stub to 7 subsections covering DV2.0 framing, hand-rolled lock, hub_company, hash key, insert-only filter, verification surface, pattern reusability)
+- `GLOSSARY.md` ✓ (Phase 2 session 4 — extended with 7 DV2.0 entries at end of section 2 + 5 acronyms in section 16)
 
 Code-shaped:
 
@@ -935,8 +1094,9 @@ Code-shaped:
 - `sql/ddl/02_create_bronze_raw_text_table.sql` ✓ (Phase 2 session 2 — second Bronze table, raw-text view over same S3 location; Phase 2 session 3 — cik projection switched to type=enum)
 - `sql/verify/01_phase1_bronze_verification.sql` ✓ (Phase 1 sessions 3-4)
 - `sql/verify/02_phase2_silver_intermediate_verification.sql` ✓ (Phase 2 session 3 — extended from 6 to 11 checks; 11/11 PASS)
+- `sql/verify/03_phase2_warehouse_verification.sql` ✓ (Phase 2 session 4 — 9-check CTE PASS/FAIL structural verify for hub_company; 9/9 PASS)
 - `iam/lakehouse_dbt_runtime_policy.json` ✓ (Phase 2 session 1 — Customer Managed Policy JSON for phil-dbt; Phase 2 sessions 2-3 — coverage validated, no edits needed)
-- `dbt/dbt_project.yml` ✓ (Phase 2 session 1; Phase 2 session 2 — intermediate +materialized: view re-added; Phase 2 session 3 — intermediate flipped to +materialized: table + Iceberg config; seeds: block added with column_types)
+- `dbt/dbt_project.yml` ✓ (Phase 2 session 1; Phase 2 session 2 — intermediate +materialized: view re-added; Phase 2 session 3 — intermediate flipped to +materialized: table + Iceberg config; seeds: block added with column_types; Phase 2 session 4 — warehouse block added with incremental + merge + iceberg + parquet + on_schema_change=ignore defaults)
 - `dbt/profiles.yml.example` ✓ (Phase 2 session 1 — env_var template, real profiles.yml gitignored)
 - `dbt/packages.yml` ✓ (Phase 2 session 1 — dbt_utils 1.x)
 - `dbt/seeds/canonical_concepts_dictionary.csv` ✓ (Phase 2 session 3 — 8 rows mapping XBRL US-GAAP tag names to project-canonical concepts + business_area)
@@ -947,7 +1107,8 @@ Code-shaped:
 - `dbt/models/intermediate/int_sec_edgar__concepts.sql` ✓ (Phase 2 session 2 — first intermediate model; Phase 2 session 3 — expanded to 8 XBRL tags + period_start_date; PASSING as Iceberg table)
 - `dbt/models/intermediate/int_sec_edgar__concepts_canonical.sql` ✓ (Phase 2 session 3 — canonical-concept reconciliation via seed join; PASSING as Iceberg table)
 - `dbt/models/intermediate/_models.yml` ✓ (Phase 2 session 2; Phase 2 session 3 — extended with canonical model contracts)
-- `dbt/models/warehouse/.gitkeep` (Phase 2 session 1 — placeholder until session 4+ first DV2.0 model)
+- `dbt/models/warehouse/hub_company.sql` ✓ (Phase 2 session 4 — first DV2.0 hub; hand-rolled SHA-256 hash + source-side insert-only filter; PASSING as Iceberg incremental merge table)
+- `dbt/models/warehouse/_models.yml` ✓ (Phase 2 session 4 — hub_company column contracts + 6 schema tests)
 - `dbt/models/marts/.gitkeep` (Phase 2 session 1 — placeholder until Phase 4 first mart model)
 - `.vscode/settings.json` ✓ (Phase 2 session 1 — yaml.schemas override for dbt_project.yml)
 - `.vscode/dbt_project.permissive.schema.json` ✓ (Phase 2 session 1 — empty schema referenced by settings.json)
@@ -967,6 +1128,7 @@ AWS infrastructure (provisioned via Console, not yet captured as IaC):
 - Glue Catalog table `financial_analytics_bronze.sec_edgar_companyfacts_raw` (Phase 2 session 2 — second raw-text Bronze table over same S3 location; manual DDL)
 - Glue Catalog view `financial_analytics_silver.stg_sec_edgar__companyfacts_raw` (Phase 2 session 2 — dbt-managed)
 - Glue Catalog view `financial_analytics_silver.int_sec_edgar__concepts` (Phase 2 session 2 — dbt-managed; first intermediate model)
+- Glue Catalog table `financial_analytics_silver.hub_company` (Phase 2 session 4 — dbt-managed Iceberg incremental merge; first DV2.0 hub)
 
 Repo-config:
 
@@ -990,9 +1152,11 @@ Repo-config:
 
 ---
 
-*Last updated: 2026-05-28 (Phase 2 session 3 close-amend — first commit
-shipped canonical-concept reconciliation + Iceberg flip + Bronze enum;
-amend commit shipped forward-projected risk pass + AU-market-aligned
-learning roadmap + ENGINEERING_STANDARDS criterion-7 strengthening + new
-phase-kickoff forward-verify rule). Append a session-log entry at every
-session close.*
+*Last updated: 2026-05-28 (Phase 2 session 4 close — first warehouse-layer
+Data Vault 2.0 hub (hub_company) shipped end-to-end with hand-rolled
+SHA-256 hash + insert-only source-side filter + Iceberg merge incremental;
+6/6 dbt tests + 9/9 SQL structural verify PASS; idempotency proven via
+second-run NO-OP; first ever phase-kickoff forward-verify pass ran +
+banked 2 forward-projected risks BEFORE any code shipped; DBT_PIPELINE
+section 8 + GLOSSARY DV2.0 entries shipped). Append a session-log entry
+at every session close.*
