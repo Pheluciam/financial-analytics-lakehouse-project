@@ -272,6 +272,14 @@ A SHA-256 hash computed over multiple business-key columns concatenated with an 
 
 **In this project:** `to_hex(sha256(to_utf8(CAST(cik AS varchar) || '||' || CAST(accession_number AS varchar)))) AS link_company_filing_hk`. The `'||'` delimiter is the project standard for every composite hash in every future DV2.0 link (and any composite-parent satellite). Per-column CAST AS varchar inside the concatenation guards against future staging-side type changes silently breaking the hash. Locked at LEARNINGS Risk 6, 2026-05-28.
 
+### **Hashdiff** `[Project 3]`
+
+A SHA-256 hash over the descriptive-payload columns of a Data Vault 2.0 satellite, stored alongside the parent hash key as the SCD-2 change-detection signal. On every load, the inbound row's hashdiff is compared against the most recent stored hashdiff for the same parent hash key — equal means the payload hasn't changed (skip), different means the payload has changed (insert a new SCD-2 row with a new load_datetime). The full attribute history is then recoverable via window functions over load_datetime per parent.
+
+Two construction subtleties matter at implementation time. **First**, Trino/Athena's `concat` operator (and the `||` shorthand) returns NULL whenever any input is NULL — so a payload concat over six columns where any can be NULL produces a NULL hashdiff, which compares equal to itself in SQL (`NULL = NULL` is false). The defense is to COALESCE every payload column to a stable string sentinel BEFORE the concat. AutomateDV's documented default sentinel is `'^^'` (double-caret); same project standard here. **Second**, the column order inside the concat is part of the contract — changing it would change every hashdiff and spuriously re-insert every row on next load.
+
+**In this project:** `sat_filing_metadata.hashdiff` = SHA-256 over `COALESCE(form_type, '^^') || '||' || COALESCE(filed_date, '^^')` — 2 truly filing-level attributes. Scope trimmed at first-dbt-run-time from 6 columns to 2 after the cardinality miss surfaced (per-period-instance attributes broke the satellite's 1:1 parent-coverage-parity invariant — LEARNINGS Risk 12, 2026-05-28). The COALESCE-sentinel pattern is applied as a defensive project standard even though both columns are reliably populated upstream — every future satellite hashdiff uses the same shape. Locked at LEARNINGS Risk 8, 2026-05-28. See `DBT_PIPELINE.md` section 8.11 for the full SCD-2 mechanic.
+
 ---
 
 ## 3. SQL & Database Concepts

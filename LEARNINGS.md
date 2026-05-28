@@ -400,6 +400,101 @@ Trino's `||` operator concatenates varchar to varchar (verified against trino.io
 
 **Carry-forward principle.** When the question is "do I extend an earlier-phase artifact to satisfy a later-phase need OR work within the existing source surface" — the answer in any portfolio project with a Bronze freeze convention is: work within the existing source surface unless coverage is materially compromised. The Phase 1 Bronze freeze is a contract with the demo-durability principles; un-freezing it for a marginal coverage gain undermines the contract. Document the coverage trade-off explicitly so it's defensible at portfolio-walkthrough time: "I picked source A over source B because B's superset coverage didn't change the analytical surface and would have required un-freezing Bronze, violating demo-durability principle 1."
 
+#### Risk 8 — Trino concat NULL propagation in hashdiff defeats SCD-2 change detection (banked 2026-05-28, Phase 2 session 6 kickoff forward-verify)
+
+**Verified against authoritative source.** Trino's string-functions docs (trino.io/docs/current/functions/string.html) state that `concat()` and the `||` operator return NULL whenever any input argument is NULL — standard SQL NULL-propagation semantics, no null-safe variant. AutomateDV's hashing best-practices page (automate-dv.readthedocs.io/en/latest/best_practises/hashing/) documents the canonical defense: COALESCE every payload column to a stable string sentinel BEFORE the concatenation, so the hash is computed over a deterministic byte sequence rather than a NULL. The AutomateDV macro default sentinel is `'^^'` (double-caret) — picked because, like the '||' delimiter on composite-key hashes, it's a character pair unlikely to appear in any business-key or attribute value.
+
+**Implication.** sat_filing_metadata's payload includes `period_start_date` which the upstream int_sec_edgar__concepts model intentionally leaves NULL for balance-sheet point-in-time concepts (Assets, Liabilities, StockholdersEquity — SEC EDGAR omits `$.start` for instant-period facts). For sat_filing_metadata sourced from companyfacts JSON the same `$.start` NULL behavior carries through. Without COALESCE, the hashdiff for ANY filing whose payload has even one NULL attribute resolves to NULL — and NULL = NULL is false in SQL — so the SCD-2 change-detection filter would see "no existing matching hashdiff" on every load and insert a duplicate row per refresh, silently corrupting the SCD-2 audit lineage. The exact failure mode banked at Risk 2 (Iceberg merge + on_schema_change duplicate insertion), but triggered by a different upstream bug — concat NULL propagation, not adapter merge semantics.
+
+**Decision (locked at this forward-verify pass).** Every payload column in every satellite hashdiff goes through COALESCE to a stable string sentinel BEFORE the `||` concatenation. Project standard sentinel = `'^^'` (AutomateDV ecosystem default). The hashdiff function chain for sat_filing_metadata is:
+
+```sql
+to_hex(sha256(to_utf8(
+    COALESCE(CAST(form_type AS varchar), '^^') || '||' ||
+    COALESCE(CAST(filed_date AS varchar), '^^') || '||' ||
+    COALESCE(CAST(period_start_date AS varchar), '^^') || '||' ||
+    COALESCE(CAST(period_end_date AS varchar), '^^') || '||' ||
+    COALESCE(CAST(fiscal_year AS varchar), '^^') || '||' ||
+    COALESCE(CAST(fiscal_period AS varchar), '^^')
+)))
+```
+
+Same SHA-256 chain as hub_company / hub_filing / link_company_filing's single-key and composite-key hashes (Risks 4 + 6); only the input expression differs. Per-column CAST AS varchar guards against type changes upstream silently breaking the hash. The '||' delimiter sits between sentinels-or-values inside the concat chain — same delimiter rationale as composite link hashes (Risk 6).
+
+**Carry-forward principle.** Any hash computed over multiple payload columns where any column can be NULL needs COALESCE-to-sentinel applied BEFORE the concat — never trust the upstream "in practice these are non-NULL" guarantee, because the SCD-2 corruption mode is silent. The sentinel must be a character sequence that cannot plausibly appear as a real value in any of the columns being hashed. `'^^'` is the AutomateDV default; project uses the same. Same logic carries to any future portfolio project with SCD-2 satellites, dimension tables with type-2 history, or audit lineage hashes.
+
+#### Risk 9 — Satellite source-side filter is an anti-join on latest-hashdiff-per-parent, NOT a NOT IN on parent hash key (banked 2026-05-28, Phase 2 session 6 kickoff forward-verify)
+
+**Verified against authoritative sources.** Scalefree's "Maintaining the Hash Diff" Data Vault Friday entry (scalefree.com/knowledge/webinars/data-vault-friday/maintaining-the-hash-diff/) and AutomateDV's loading docs (automate-dv.readthedocs.io/en/latest/best_practises/loading/) both confirm: "in an incremental load, the first record of a batch is inserted only if it is different from the latest record in the existing Satellite." The change-detection mechanic compares the inbound hashdiff against the most recent stored hashdiff for the same parent hash key — if different OR no row exists for that parent, insert a new satellite row with a new load_datetime. If identical, skip. This is the SCD-2 insert-on-change idiom.
+
+**Implication.** The source-side filter pattern that worked for hubs and links (`WHERE hub_hk NOT IN (SELECT hub_hk FROM {{ this }})`) is WRONG for satellites — it would exclude every already-seen parent from the source, including parents whose payload genuinely changed and SHOULD insert a new SCD-2 row. The satellite filter needs the opposite semantic: include parents whose inbound hashdiff differs from the most recent stored hashdiff. This is a real anti-join, not a NOT IN.
+
+**Decision (locked at this forward-verify pass).** The satellite source-side `is_incremental()` filter pattern is:
+
+```sql
+{% if is_incremental() %}
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM (
+        SELECT
+            hub_filing_hk,
+            hashdiff,
+            ROW_NUMBER() OVER (
+                PARTITION BY hub_filing_hk
+                ORDER BY load_datetime DESC
+            ) AS rn
+        FROM {{ this }}
+    ) latest
+    WHERE latest.hub_filing_hk = inbound.hub_filing_hk
+      AND latest.hashdiff = inbound.hashdiff
+      AND latest.rn = 1
+)
+{% endif %}
+```
+
+The window function picks the latest stored row per parent; the NOT EXISTS clause excludes inbound rows whose hashdiff matches the latest stored hashdiff for the same parent. Inbound rows pass through to merge if (a) no existing row for that parent OR (b) hashdiff differs from latest. Pattern is DV2.0-idiomatic and matches the AutomateDV sat-macro semantics structurally.
+
+**Carry-forward principle.** Every DV2.0 model class needs a class-specific source-side filter pattern — hubs and links use `NOT IN` on the model's own hash key (immutable PK contract); satellites use a `NOT EXISTS` anti-join on (parent_hk, latest_hashdiff) (SCD-2 insert-on-change contract). The filter pattern reflects the model class's audit-lineage semantics; trusting any single pattern across all three model classes corrupts at least one. Carries to every future warehouse satellite (sat_company_metadata, sat_concept_value, sat_concept_canonical) unchanged.
+
+#### Risk 10 — Single sat hash key vs composite (parent_hk, load_datetime) unique_key for satellite incremental merge (banked 2026-05-28, Phase 2 session 6 kickoff forward-verify)
+
+**Verified against authoritative sources.** dbt-athena Iceberg merge docs (docs.getdbt.com/reference/resource-configs/athena-configs) confirm `unique_key` accepts either a single column name or a list of columns. Scalefree's hash-key documentation (blog.scalefree.com/2017/04/28/hash-keys-in-the-data-vault/) and AutomateDV's metadata reference (automate-dv.readthedocs.io/en/stable/metadata/) document two equally-valid satellite primary-key conventions: (a) composite of (parent hub hash key, load_datetime) — the natural DV2.0 PK; (b) a dedicated `sat_<entity>_hk` hashed over the natural PK columns — gives the satellite a single-column surrogate key matching the hub/link pattern.
+
+**Implication.** Two defensible designs for sat_filing_metadata's unique_key:
+
+| Path | Pros | Cons |
+|---|---|---|
+| **Composite list `unique_key=['hub_filing_hk', 'load_datetime']`** | Matches AutomateDV / Scalefree DV2.0 textbook satellite PK directly; no extra hash column to compute or test | Two-column unique_key surface; engine-level merge predicate touches two columns at runtime; reads less consistently with hub_company/hub_filing/link_company_filing which all carry a single hash key as PK |
+| **Dedicated `sat_filing_metadata_hk = sha256(hub_filing_hk \|\| '\|\|' \|\| CAST(load_datetime AS varchar))`** | Single-column PK reads consistently with hub and link pattern; merge predicate is single-column; downstream PIT tables, point-of-time queries, and Power BI marts all join on a single hash key like every other warehouse model | Adds one column to the satellite; the composite PK is implicit in the hash rather than explicit in the column list — needs the dbt_utils.unique_combination_of_columns test on (hub_filing_hk, load_datetime) to make the natural-PK contract auditable at test time |
+
+**Decision (locked at this forward-verify pass).** Path B — dedicated `sat_filing_metadata_hk` over `hub_filing_hk || '||' || CAST(load_datetime AS varchar)`. Project standard for every future satellite (sat_company_metadata, sat_concept_value, etc.): single sat hash key as unique_key, composite natural PK auditable via `dbt_utils.unique_combination_of_columns` test on (parent_hk, load_datetime). Rationale: keeps the hub/link/sat surface visually consistent (every warehouse model has a single-column hash PK called `<class>_<entity>_hk`); the explicit natural-PK contract lives in the schema test, where it belongs as a test-time check rather than a runtime engine concern. Same '||' delimiter as composite link hashes (Risk 6); same SHA-256 chain as everything else (Risk 4).
+
+**Carry-forward principle.** Visual consistency in the warehouse-layer surface matters for portfolio storytelling — every hub, link, and satellite has the same shape (single-column hash key as PK + business-key columns + load_datetime + record_source + payload). The natural-PK semantics of each model class live in their schema tests, not in their column lists. Pattern carries to every future satellite unchanged. Project rule: every warehouse-layer model has exactly one column named `<class>_<entity>_hk` that is its single-column unique_key.
+
+#### Risk 11 — Satellite source from companyfacts JSON needs DISTINCT to collapse per-concept duplicates (banked 2026-05-28, Phase 2 session 6 kickoff forward-verify)
+
+**Verified against authoritative sources.** SEC EDGAR companyfacts JSON structure (sec.gov/search-filings/edgar-application-programming-interfaces) confirms the same filing-level attributes (`accn`, `form`, `filed`, `fy`, `fp`, `end`, `start`) appear in every concept's per-period array entry — these are filing-level metadata, not concept-level. A filing reporting 8 in-scope concepts produces 8 array entries with identical filing-level attributes. The hub_filing model (session 5) handles this correctly with `SELECT DISTINCT accession_number`; sat_filing_metadata needs the same DISTINCT discipline applied to the full payload row, not just the parent BK.
+
+**Implication.** Without DISTINCT applied to the projected payload before hashing, the satellite would receive 8 rows per (cik, accn) — identical filing-level attributes, identical computed hashdiff, identical computed sat_filing_metadata_hk. The unique_key constraint at engine-level would reject duplicates on merge (so engine-side data integrity holds), but every dbt run would scan and shuffle 8x the necessary rows through the merge engine — wasted compute, wasted Athena scan cost, and the dbt run statistics report would be wildly misleading ("merged 6,551 rows" actual vs "merged 52,408 rows scanned"). At Free Tier budget this is a real cost concern, not just an aesthetic one.
+
+**Decision (locked at this forward-verify pass).** Apply DISTINCT to the projected payload row (the full (hub_filing_hk, form_type, filed_date, period_start_date, period_end_date, fiscal_year, fiscal_period) tuple) BEFORE hashdiff computation. The pattern carries the hub_filing DISTINCT discipline forward — every model that sources from the per-concept UNNEST chain applies DISTINCT at the natural-cardinal-unit level for that model (one row per accession_number for hub_filing; one row per (accession_number, payload) for sat_filing_metadata; one row per (cik, accession_number) for link_company_filing).
+
+**Carry-forward principle.** When a model sources from an UNNEST chain that intentionally repeats certain attributes (the same filing-level metadata across 8 concept arrays), the model body must apply DISTINCT at the natural-cardinal-unit level for that model. Each warehouse-layer model has a different cardinal unit — hubs at the business-key level, links at the (BK1, BK2) pair level, satellites at the (parent_BK, payload-tuple) level. The DISTINCT-at-cardinal-level rule is what makes the UNNEST source pattern reusable across the three model classes without per-class manual deduplication contortions.
+
+#### Risk 12 — Filing-level vs filing-instance-level attribute scope on satellites: cardinality-test discipline (banked 2026-05-28, Phase 2 session 6 first dbt run surfaced the miss)
+
+**Diagnosis → fix → lesson, banked under the forward-projected-risks section because the carry-forward principle is what matters going forward.** First `dbt run --select sat_filing_metadata` returned `OK 45851` rows, ~7x the expected 6,551 (the hub_filing parent count). Materialization succeeded, but the cardinality is wrong by design — sat_filing_metadata as scoped at session 6 kickoff carried 6 payload attributes (form_type, filed_date, period_start_date, period_end_date, fiscal_year, fiscal_period). The DISTINCT collapse per Risk 11 worked correctly given those columns, but the column selection itself conflated two distinct grains. SEC EDGAR companyfacts JSON: a single 10-K filing's accession_number appears across MULTIPLE period-instance array entries inside each concept's units.USD array — comparatives (current FY + 2 prior FYs in 10-K; current Q + YTD + prior-year same in 10-Q). period_start_date / period_end_date / fiscal_year / fiscal_period are per-period-instance, not per-filing. Only form_type and filed_date are truly filing-level (entityName too, but that lives upstream of the per-period UNNEST and belongs on sat_company_metadata when that lands).
+
+**Verified empirically + against authoritative source.** SEC EDGAR API docs (sec.gov/search-filings/edgar-application-programming-interfaces) document the companyfacts JSON structure as one array entry per (filing, period) tuple within each concept's units array — confirming the per-instance grain. Empirical confirmation: 6,551 distinct accession_numbers across hub_filing × ~7 average period-instances per filing ≈ 45,851 rows.
+
+**Fix (locked at this within-session correction).** Trim sat_filing_metadata's payload to the 2 truly filing-level attributes only — form_type + filed_date. Full-refresh rebuild (first run was CTAS so no history exists to preserve). The 4 period/fiscal attributes naturally belong on a future model — either a hub_period + link_filing_period structure, or baked into sat_concept_value when that lands in a later session. Both are forward decisions, not session 6 scope.
+
+**Carry-forward principle — cardinality-test discipline for every future satellite.** At design time, before code ships, every satellite gets a 30-second cardinality sanity check: "what is the expected row count on first load, and how does it relate to the parent hub row count?" Three valid satellite cardinalities exist in DV2.0 textbook design: (a) **1:1 with parent** (every parent has exactly one current-state row — sat_filing_metadata as now scoped, sat_company_metadata) — most common, the natural single-entity-descriptor satellite shape; (b) **many-to-1 against parent via a separate temporal hub** (parent has many entries indexed by time/period, but they're modeled as a separate hub like hub_period with a link) — what the period attributes need; (c) **multi-active satellite** (parent has multiple concurrent active rows, modeled explicitly as a multi-active sat with a sub-sequence key) — rare, used for concurrent set-membership patterns. Mixing per-instance attributes into a 1:1 satellite collapses (a) and (b) into a shape that's neither — looks like a sat but behaves like a link-with-payload, breaks the parent-coverage-parity invariant, and breaks downstream SCD-2 query patterns that assume "latest row per parent" is a single row. The mental test: "if I observed this same parent twice, would this attribute have the same value?" If yes → 1:1 sat payload. If no → it belongs on a different model class. Apply to every future satellite in this project (sat_company_metadata, sat_concept_value, sat_concept_canonical) and to every satellite in every future portfolio project.
+
+**Carry-forward principle — test ordering by cost.** The cardinality miss should have been caught by a 30-second `SELECT COUNT(*)` parity check BEFORE running dbt test (which scans every column for every test, expensive) or verify/05 (which joins multiple tables, more expensive). Senior-DE test-ordering discipline: row-count parity check FIRST (cheap, single aggregation), schema tests SECOND (multi-column scans), structural verify LAST (multi-table joins). The Athena scan cost of running schema tests against a 45,851-row model with a known wrong cardinality is pure waste — the parity check would have surfaced the issue at ~$0 cost. Banking this here so the next satellite session leads with the parity check.
+
+**Carry-forward principle — forward-verify pass must include cardinality reasoning, not just function-chain reasoning.** Session 6 kickoff forward-verify pass surfaced Risks 8/9/10/11 around hashdiff mechanics, source-side filter shape, unique_key construction, and DISTINCT discipline — but did NOT reason about whether the selected payload columns were 1:1 with the parent. That class of question (model-grain-vs-payload-grain) is now part of every future forward-verify pass: before locking the payload column list, name the expected first-load row count and confirm it equals the parent hub count for a 1:1 satellite. The 30-second check belongs at design time, not at first-run time.
+
 ---
 
 ### Banked open items from session 1 (not lessons, but trackable)

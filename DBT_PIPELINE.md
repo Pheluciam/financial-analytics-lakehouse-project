@@ -656,6 +656,212 @@ check earned its keep — it's the structural proof that the '||'
 delimiter convention is what's actually in the digest, not a different
 delimiter from a copy-paste regression.
 
+### 8.11 First satellite: sat_filing_metadata (Phase 2 session 6)
+
+`dbt/models/warehouse/sat_filing_metadata.sql` is the first DV2.0
+satellite in the project. Parent = hub_filing (accession_number
+business key). Carries 2 truly filing-level descriptive attributes
+observed in the SEC EDGAR companyfacts JSON: form_type and filed_date.
+1:1 cardinality with hub_filing on first load — every parent has
+exactly one sat row when no history has accumulated.
+
+**Scope correction at first-run time (LEARNINGS Risk 12,
+2026-05-28).** Initial session 6 design carried 4 additional payload
+columns (period_start_date, period_end_date, fiscal_year,
+fiscal_period). First dbt run returned 45,851 rows — ~7x the expected
+6,551 (hub_filing parent count). Diagnosis: those 4 columns are
+per-period-instance, not per-filing — a 10-K reports comparatives
+(current FY + 2 prior FYs) and a 10-Q reports the current quarter
+plus YTD plus prior-year-same, each as a separate array entry within
+each concept's units.USD array. Per-instance attributes break the
+satellite's 1:1 parent-coverage-parity invariant. Trimmed scope to
+the 2 truly filing-level attributes. The per-period attributes
+belong on a future model class (hub_period + link_filing_period, OR
+baked into sat_concept_value when that lands). Carry-forward
+principle banked: every satellite gets a 30-second cardinality
+sanity check at design time — "expected first-load row count
+should equal parent hub row count" — before code ships.
+
+**Why satellites exist (DV2.0 framing).** Hubs and links carry the
+structural skeleton — what entities exist and how they relate —
+but they intentionally hold no descriptive attributes. Every
+attribute that describes an entity lives in a satellite. The
+SCD-2-by-construction contract is the differentiator: any time an
+attribute changes, the satellite inserts a NEW row with a new
+load_datetime, preserving the prior row indefinitely. The full
+history of every attribute change for every entity is recoverable
+at any future point — exactly the property regulators want for
+restatement auditability, and exactly the property that motivated
+Linstedt's DV2.0 design in the first place.
+
+**Three new mechanics relative to hub_filing.** All three were
+surfaced at the session 6 forward-verify pass and banked as
+LEARNINGS Risks 8/9/10/11 BEFORE any code shipped. They distinguish
+satellite design from hub/link design:
+
+1. **hashdiff column.** SHA-256 over the COALESCEd payload concat,
+   alongside the parent hash key. The hashdiff fingerprints the
+   payload state at a single load_datetime — unchanged payload
+   yields the same hashdiff next load, changed payload yields a
+   different one. The COALESCE-sentinel pattern (`'^^'` default,
+   per AutomateDV convention) is mandatory because Trino's concat
+   returns NULL whenever any input is NULL, and `period_start_date`
+   is NULL upstream for balance-sheet point-in-time facts (LEARNINGS
+   Risk 8).
+
+2. **Source-side filter is an anti-join, not a NOT IN.** The hub
+   pattern `WHERE hub_hk NOT IN (SELECT hub_hk FROM {{ this }})`
+   would exclude every already-seen parent — including parents
+   whose payload genuinely changed. The satellite filter instead
+   computes the latest stored hashdiff per parent (window function
+   over load_datetime DESC, take rn = 1) and excludes inbound rows
+   whose hashdiff matches the latest stored one for the same parent.
+   Inbound rows pass through to merge only when (a) no existing row
+   for that parent OR (b) the inbound hashdiff differs from the
+   latest stored hashdiff (LEARNINGS Risk 9).
+
+3. **Dedicated sat_filing_metadata_hk over the natural composite
+   PK.** The DV2.0 textbook satellite PK is (parent_hk, load_datetime).
+   Two equally-valid implementations: composite list as unique_key,
+   or a single SHA-256 hash over the natural PK. Project standard is
+   the single hash — keeps the hub/link/sat surface visually
+   consistent (every warehouse-layer model has one column named
+   `<class>_<entity>_hk` that's its single-column unique_key). The
+   composite natural PK becomes a test-time contract enforced via
+   `dbt_utils.unique_combination_of_columns` in `_models.yml`
+   (LEARNINGS Risk 10).
+
+**Source DISTINCT discipline.** Same UNNEST chain as hub_filing and
+link_company_filing, but projects 6 payload columns alongside
+accession_number. Same accn appears across all 8 in-scope concept
+arrays in the JSON with identical filing-level attributes (form,
+filed, fy, fp, end, start are filing-level, not concept-level).
+DISTINCT applied to the FULL payload tuple (not just the BK)
+collapses these to one row per genuinely-distinct (accession_number,
+payload-tuple) before hashing — keeps engine-side scan cost
+proportional to the natural cardinal unit (LEARNINGS Risk 11).
+
+**hashdiff function chain.**
+
+```sql
+to_hex(sha256(to_utf8(
+    COALESCE(CAST(form_type AS varchar), '^^') || '||' ||
+    COALESCE(CAST(filed_date AS varchar), '^^')
+))) AS hashdiff
+```
+
+Same SHA-256 chain as the hub_company / hub_filing / link composite
+hashes (LEARNINGS Risk 4); only the input expression differs.
+Per-column CAST AS varchar guards against upstream type changes
+silently breaking the hash. Column order inside the concat is part
+of the contract — changing it would change every hashdiff and
+spuriously re-insert every row on next load. Both payload columns
+are reliably populated in the companyfacts JSON, but the COALESCE
+pattern is applied as a defensive project standard — every future
+satellite hashdiff uses the same shape.
+
+**sat_filing_metadata_hk function chain.**
+
+```sql
+to_hex(sha256(to_utf8(
+    CAST(hub_filing_hk AS varchar) || '||' || CAST(load_datetime AS varchar)
+))) AS sat_filing_metadata_hk
+```
+
+Single load_datetime expression evaluated once per query so every
+row in this batch shares it — DV2.0 contract that a batch of changes
+lands with one consistent LDTS.
+
+**Source-side anti-join filter.**
+
+```sql
+{% if is_incremental() %}
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM (
+        SELECT
+            hub_filing_hk,
+            hashdiff,
+            ROW_NUMBER() OVER (
+                PARTITION BY hub_filing_hk
+                ORDER BY load_datetime DESC
+            ) AS rn
+        FROM {{ this }}
+    ) latest
+    WHERE latest.hub_filing_hk = inbound.hub_filing_hk
+      AND latest.hashdiff = inbound.hashdiff
+      AND latest.rn = 1
+)
+{% endif %}
+```
+
+The window function picks each parent's latest stored row; the
+NOT EXISTS clause excludes inbound rows whose hashdiff matches.
+Pattern is DV2.0-idiomatic and structurally matches the AutomateDV
+sat-macro semantics.
+
+**Materialization config.** Same warehouse-layer defaults from
+`dbt_project.yml`: incremental + merge + iceberg + parquet +
+on_schema_change=ignore. The on_schema_change=ignore is MANDATORY
+for satellites per LEARNINGS Risk 2 — Iceberg merge +
+on_schema_change=sync_all_columns has a documented duplicate-insertion
+bug (dbt-glue issue #571). Schema evolution on satellites is
+handled via full-refresh, never via on_schema_change. Per-model
+`unique_key='sat_filing_metadata_hk'` only.
+
+### 8.12 SCD-2 mechanic walkthrough (sat_filing_metadata)
+
+The full mechanic on three sequential loads, to make the contract
+auditable:
+
+| Load | Inbound payload for parent X | Existing latest hashdiff for X | Anti-join verdict | Engine action |
+|---|---|---|---|---|
+| Load 1 (first run) | (10-K, 2024-11-01, ...) → hashdiff = H1 | (no existing row) | NOT EXISTS = true → row passes | INSERT row with H1, LDTS = T1 |
+| Load 2 (re-run, payload unchanged) | (10-K, 2024-11-01, ...) → hashdiff = H1 | H1 | NOT EXISTS = false → row dropped | NO-OP |
+| Load 3 (filing amended, form_type → 10-K/A) | (10-K/A, 2024-11-01, ...) → hashdiff = H2 | H1 | NOT EXISTS = true → row passes | INSERT row with H2, LDTS = T3. Row from Load 1 (H1, T1) preserved. |
+
+Querying the current state of any filing = window function in the
+mart layer (take the row with MAX(load_datetime) per parent_hk).
+Querying historical state at any past date = `WHERE load_datetime
+<= <as-of-date>` then MAX. The point of DV2.0: every historical
+state is recoverable; no row is ever overwritten.
+
+### 8.13 Verification surface for sat_filing_metadata
+
+`sql/verify/05_phase2_warehouse_satellites_verification.sql` — 11
+CTE PASS/FAIL checks in the same shape as verify/03 and verify/04:
+
+- Checks 1-5 cover the structural contract: sat hash key
+  uniqueness + NOT NULL + length = 64, hashdiff NOT NULL + length
+  = 64.
+- Check 6 is FK closure to hub_filing (no orphan parent keys).
+- Check 7 is the composite natural PK (hub_filing_hk,
+  load_datetime) uniqueness check — independently confirms the
+  DV2.0 textbook contract that the single-column unique_key
+  enforces at engine level.
+- Check 8 is parent coverage parity — on first load, sat row
+  count = distinct hub_filing_hk in sat = hub_filing row count
+  (1:1 cardinality invariant). This is the check that would have
+  surfaced the original scope miss (Risk 12) BEFORE the
+  expensive schema-test scan, if it had been promoted to a
+  design-time sanity check rather than a verify-suite check;
+  carry-forward principle banked in LEARNINGS.
+- Checks 9-10 are hash-determinism reproducibility on Apple's
+  lexicographically-smallest accession — recomputes both
+  sat_filing_metadata_hk (Risk 10 function chain) and hashdiff
+  (Risk 8 function chain — 2-column COALESCE-protected payload)
+  and confirms the stored values match. Earns its keep as
+  structural proof that the function chains reproduce
+  deterministically across runs.
+- Check 11 confirms record_source is the constant
+  'sec_edgar.companyfacts' on every row.
+
+Idempotency check is the second dbt run — expected NO-OP per the
+anti-join filter excluding every inbound row whose hashdiff
+matches the latest stored hashdiff for the same parent. Same
+pattern as hubs/links but the mechanic that gets exercised is
+different (anti-join, not NOT IN).
+
 ## 9. Verification surface (per session)
 
 Each dbt session ships with a verification suite parallel to Phase 1's

@@ -212,3 +212,138 @@ models:
           row was first seen in. Constant 'sec_edgar.companyfacts'.
         tests:
           - not_null
+
+  - name: sat_filing_metadata
+    description: |
+      Data Vault 2.0 satellite for the filing entity. Parent =
+      hub_filing (accession_number business key). Carries 2 truly
+      filing-level descriptive attributes (form_type, filed_date)
+      observed in the SEC EDGAR companyfacts JSON. 1:1 cardinality
+      with hub_filing on first load — every parent has exactly one
+      sat row when no history has accumulated. Initially scoped at
+      session 6 kickoff with 4 additional payload columns
+      (period_start_date, period_end_date, fiscal_year,
+      fiscal_period); trimmed at first-dbt-run-time after the
+      cardinality miss surfaced — those columns are
+      per-period-instance, not per-filing, and broke the satellite
+      1:1 invariant. See LEARNINGS Risk 12 (2026-05-28) for the
+      diagnosis + carry-forward principle. The period/fiscal
+      attributes belong on a future model (hub_period +
+      link_filing_period, OR baked into sat_concept_value).
+      SCD-2 insert-on-change semantics — every payload change
+      inserts a new row with a new load_datetime; unchanged payloads
+      on subsequent refreshes are dropped at the source-side filter
+      via a NOT EXISTS anti-join on (hub_filing_hk, latest hashdiff).
+      Single-column unique_key = sat_filing_metadata_hk (a SHA-256
+      hash over hub_filing_hk || '||' || load_datetime); the
+      composite natural PK (hub_filing_hk, load_datetime) is enforced
+      at test time via dbt_utils.unique_combination_of_columns below.
+      hashdiff is SHA-256 over the COALESCE-sentinel-protected concat
+      of the 2 payload columns ('^^' sentinel + '||' delimiter,
+      AutomateDV ecosystem defaults — defeats Trino's concat NULL
+      propagation per LEARNINGS Risk 8, 2026-05-28). Materialized as
+      Iceberg via merge incremental strategy; layer defaults in
+      dbt_project.yml warehouse block include on_schema_change=ignore
+      (MANDATORY for satellites per LEARNINGS Risk 2 — Iceberg merge
+      + on_schema_change has a documented duplicate-insertion bug).
+      Walkthrough: DBT_PIPELINE.md section 8.
+    tests:
+      # Composite natural PK contract (DV2.0 textbook): one row per
+      # (parent hash key, load_datetime). Auditable at test time via
+      # dbt_utils — the single-column unique_key on sat_filing_metadata_hk
+      # enforces the same uniqueness at engine level via merge.
+      # dbt 1.10+ argument-nesting structure verified against
+      # github.com/dbt-labs/dbt-utils/blob/main/macros/generic_tests/
+      # unique_combination_of_columns.sql on 2026-05-28 at session 6
+      # forward-verify pass (criterion-6 proactive bypass per the
+      # THIRD-miss locked rule, LEARNINGS 2026-05-27 entry).
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - hub_filing_hk
+              - load_datetime
+    columns:
+      - name: sat_filing_metadata_hk
+        description: |
+          SHA-256 hash of (hub_filing_hk || '||' || load_datetime),
+          hex-encoded. Single-column surrogate primary key for the
+          satellite — matches the hub/link single-hash-PK surface so
+          every warehouse-layer model looks the same. The composite
+          natural PK (hub_filing_hk, load_datetime) is enforced at
+          test time, not at column level. Each new SCD-2 row
+          (different payload, new load_datetime) gets a distinct
+          sat_filing_metadata_hk by construction.
+        tests:
+          - not_null
+          - unique
+
+      - name: hashdiff
+        description: |
+          SHA-256 hash over the COALESCE-sentinel-protected concat of
+          the 6 payload columns in fixed order (form_type, filed_date,
+          period_start_date, period_end_date, fiscal_year,
+          fiscal_period). '^^' sentinel + '||' delimiter both
+          AutomateDV ecosystem defaults — neither character pair
+          appears in any real attribute value, and COALESCE-to-sentinel
+          defeats Trino's concat NULL propagation that would otherwise
+          mask change detection (LEARNINGS Risk 8). Same hashdiff
+          across loads = unchanged payload = no new SCD-2 row.
+          Different hashdiff = payload changed = new SCD-2 row.
+        tests:
+          - not_null
+
+      - name: hub_filing_hk
+        description: |
+          Foreign key into hub_filing. SHA-256 hash of accession_number
+          (single-key chain, identical to hub_filing.hub_filing_hk and
+          link_company_filing.hub_filing_hk).
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('hub_filing')
+                field: hub_filing_hk
+
+      - name: accession_number
+        description: |
+          18-character SEC EDGAR accession number. Carried on the
+          satellite alongside the parent FK hash so downstream
+          consumers can read the satellite without joining back to
+          hub_filing for the business key.
+        tests:
+          - not_null
+
+      - name: form_type
+        description: |
+          SEC filing form type (e.g., '10-K', '10-Q', '10-K/A',
+          '10-Q/A'). Payload attribute — descriptive, not part of
+          the PK. Extracted from the $.form field in each per-period
+          array entry; filing-level metadata (identical across all
+          per-period-instance entries for the same accession_number).
+        tests:
+          - not_null
+
+      - name: filed_date
+        description: |
+          Calendar date the filing was filed with SEC EDGAR.
+          TRY_CAST from $.filed in the JSON. Payload attribute;
+          filing-level metadata (identical across all
+          per-period-instance entries for the same accession_number).
+        tests:
+          - not_null
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) recording the load batch this satellite
+          row landed in. Part of the natural composite PK with
+          hub_filing_hk. Set on insert, never updated.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          String identifier of the source system / dataset this
+          satellite row was first seen in. Constant
+          'sec_edgar.companyfacts'.
+        tests:
+          - not_null
