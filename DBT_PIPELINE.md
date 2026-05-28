@@ -548,6 +548,114 @@ structurally:
   carries verbatim — each future warehouse model gets its own
   `sql/verify/NN_...sql` file in the same shape.
 
+### 8.8 Second hub: hub_filing (Phase 2 session 5)
+
+`dbt/models/warehouse/hub_filing.sql` is the second hub. Business key =
+accession_number, the 18-character SEC-assigned identifier (format
+`'##########-##-######'`, with literal hyphens in positions 11 and 14).
+One row per unique filing across the S&P 100 universe; session 5 close
+landed 6,551 distinct filings spanning the 10-year companyfacts history.
+
+**Source = stg_sec_edgar__companyfacts_raw.** Honors the session-4 lock
+that DV2.0 hubs source from the rawest layer where the business key
+first appears (LEARNINGS Risk 7, 2026-05-28). The model body Jinja-loops
+the same 8 in-scope XBRL concepts as `int_sec_edgar__concepts`, UNNESTs
+each `$.facts["us-gaap"].<concept>.units.USD` array, projects `accn` as
+accession_number, applies DISTINCT, and hashes. Phase 1 submissions-endpoint
+extract extension explicitly rejected at the forward-verify pass —
+would have un-frozen Bronze mid-project for a marginal coverage gain.
+Coverage trade-off documented: hub_filing covers every accession_number
+for filings that reported at least one of the 8 in-scope concepts;
+for the S&P 100 universe every meaningful 10-K / 10-Q reports at least
+one of those, so coverage is universal in practice.
+
+**Hash function chain is identical to hub_company.** `to_hex(sha256(to_utf8(CAST(accession_number AS varchar))))`.
+The defensive CAST guards against future staging-side type changes.
+
+**Insert-only semantics carry from hub_company.** Same source-side
+`is_incremental()` filter pattern, same `unique_key` engine-level
+safety net.
+
+### 8.9 First link: link_company_filing (Phase 2 session 5)
+
+`dbt/models/warehouse/link_company_filing.sql` is the first link. One
+row per unique (cik, accession_number) pair observed in the
+companyfacts JSON — recording the natural relationship that "filer X
+filed filing Y." Session 5 close landed 6,551 link rows (identical to
+hub_filing's row count, as expected — SEC's accession-number
+assignment convention guarantees one filing maps to exactly one
+filer, so the link is a one-to-many from filers to filings, never
+many-to-many).
+
+**Composite hash construction (LEARNINGS Risk 6, 2026-05-28).** The
+link's primary hash key concatenates the two business keys with a
+`'||'` delimiter before hashing:
+
+```sql
+to_hex(sha256(to_utf8(
+    CAST(cik AS varchar) || '||' || CAST(accession_number AS varchar)
+))) AS link_company_filing_hk
+```
+
+The `'||'` delimiter is the AutomateDV ecosystem default. It defeats
+the documented `'-'`-delimiter collision-on-hyphenated-inputs ambiguity
+that bites the dbt_utils.generate_surrogate_key macro (dbt-utils issue
+#1015 — `'123-' + '-456'` produces the same digest as `'123' + '--456'`).
+SEC EDGAR accession numbers literally contain hyphens in positions 11
+and 14, so `'-'` as a delimiter would not be hash-safe here; `'||'`
+never appears in either business-key value, so the digest is
+unambiguous by construction. Document the design call in the model
+body so the choice is auditable.
+
+**FK hashes match the parent hub chain.** The link carries
+`hub_company_hk` and `hub_filing_hk` as foreign-key columns alongside
+the composite `link_company_filing_hk`. Each FK hash is computed via
+the same single-key chain as its parent hub
+(`to_hex(sha256(to_utf8(CAST(cik AS varchar))))` for `hub_company_hk`,
+ditto for `hub_filing_hk`). Joining from link to either parent hub
+on the hash columns is therefore valid by construction — no integrity
+gymnastics needed at join time. The verify/04 FK-closure checks
+(checks 10 + 11) confirm this empirically: every link row's
+`hub_company_hk` and `hub_filing_hk` resolve to a parent hub row.
+
+**Insert-only semantics carry from hubs.** Scalefree confirms
+(scalefree.com/scalefree-newsletter/insert-only-in-data-vault/):
+"the Link should remain a pure, append-only record of every
+relationship ever observed, without status flags or end dates." Same
+source-side `is_incremental()` filter pattern, same `unique_key`
+safety net, same `on_schema_change: ignore` default. Re-seeing the
+same (cik, accession_number) pair on a later extract is excluded
+from the source SELECT before the merge — original `load_datetime`
++ `record_source` are immutable.
+
+**Source-side UNNEST mirrors hub_filing.** Same Jinja loop over the
+8 in-scope concepts, but the link projects both cik (from the
+partition key) and accession_number (from accn) and applies DISTINCT
+on the pair rather than the accn alone.
+
+### 8.10 Verification surface for hub_filing + link_company_filing
+
+`sql/verify/04_phase2_warehouse_links_verification.sql` — 13 CTE
+PASS/FAIL checks in the same shape as verify/03:
+
+- Checks 1-5 cover hub_filing: hash-key uniqueness, NOT NULL, length =
+  64, business-key uniqueness, and lineage parity against the
+  source-side DISTINCT accession_number count across the 8 in-scope
+  concepts.
+- Checks 6-13 cover link_company_filing: composite-hash uniqueness,
+  NOT NULL, length = 64, composite-hash determinism reproducibility
+  on Apple's lexicographically-smallest accession_number (recomputes
+  `to_hex(sha256(to_utf8('0000320193' || '||' || <accn>)))` and
+  confirms it matches the stored link hash), FK closure to both
+  parent hubs, source-pair lineage parity, and business-key
+  cardinality sanity (every link's (cik, accession_number) pair
+  matches a hub_company.cik AND a hub_filing.accession_number).
+
+13/13 PASS in 9.3 sec at session 5 close. Composite-hash determinism
+check earned its keep — it's the structural proof that the '||'
+delimiter convention is what's actually in the digest, not a different
+delimiter from a copy-paste regression.
+
 ## 9. Verification surface (per session)
 
 Each dbt session ships with a verification suite parallel to Phase 1's

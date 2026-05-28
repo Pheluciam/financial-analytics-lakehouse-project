@@ -67,3 +67,148 @@ models:
           endpoint, or a non-SEC company registry) joins the lake.
         tests:
           - not_null
+
+  - name: hub_filing
+    description: |
+      Data Vault 2.0 hub for the SEC filing entity. One row per unique
+      accession_number — the 18-character SEC-assigned identifier for
+      each filing (e.g., '0000320193-24-000123'). SHA-256 hash key
+      computed via to_hex(sha256(to_utf8(cast(accession_number AS
+      varchar)))), stored as hub_filing_hk and referenced by every
+      downstream link (link_company_filing) and satellite
+      (s_filing_metadata, when introduced). Insert-only by construction
+      — load_datetime records the first observation of each
+      accession_number and is immutable on subsequent refreshes
+      (source-side is_incremental filter excludes seen-before hash keys
+      before the engine-level merge). Source = stg_sec_edgar__companyfacts_raw,
+      via the same Jinja-loop UNNEST pattern as int_sec_edgar__concepts —
+      hub_filing's lineage is independent of the canonical-concept
+      reconciliation chain. Walkthrough: DBT_PIPELINE.md section 8.
+    columns:
+      - name: hub_filing_hk
+        description: |
+          SHA-256 hash of the business key (accession_number),
+          hex-encoded. Stable across loads — the same accession_number
+          always produces the same hash. Primary key of the hub by
+          DV2.0 convention; foreign key target from every link and
+          satellite that points to a filing.
+        tests:
+          - not_null
+          - unique
+
+      - name: accession_number
+        description: |
+          18-character SEC EDGAR accession number with hyphens in
+          positions 11 and 14 (format '##########-##-######'). Business
+          key of the hub — the natural identifier SEC uses for each
+          filing. Extracted from the per-period accn field inside the
+          companyfacts JSON's $.facts["us-gaap"].<concept>.units.USD
+          arrays via UNNEST across the 8 in-scope XBRL concepts;
+          DISTINCT applied before hashing.
+        tests:
+          - not_null
+          - unique
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) recording the first observation of this
+          accession_number in the warehouse. Set on insert, never
+          updated — the is_incremental source-side filter ensures
+          already-seen hash keys are excluded from subsequent merges.
+          The immutability of this column IS the DV2.0 audit-lineage
+          contract.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          String identifier of the source system / dataset this hub
+          row was first seen in. Constant 'sec_edgar.companyfacts'
+          for every row this session (single source).
+        tests:
+          - not_null
+
+  - name: link_company_filing
+    description: |
+      Data Vault 2.0 link associating hub_company (cik) with hub_filing
+      (accession_number). One row per unique (cik, accession_number)
+      pair observed in the companyfacts JSON — the natural many-to-one
+      relationship of filings to filers. Composite SHA-256 hash key
+      computed via to_hex(sha256(to_utf8(cast(cik AS varchar) || '||'
+      || cast(accession_number AS varchar)))) — the '||' delimiter is
+      the AutomateDV ecosystem default, picked over dbt_utils' '-' to
+      defeat the documented collision-on-hyphenated-inputs ambiguity
+      that bites accession-number values (LEARNINGS Risk 6, 2026-05-28).
+      Carries hub_company_hk and hub_filing_hk as FK columns alongside
+      the composite link hash. Insert-only by construction — same
+      source-side is_incremental filter pattern as hubs; Scalefree
+      confirms links are pure append-only records of every relationship
+      ever observed. Source = stg_sec_edgar__companyfacts_raw via the
+      same Jinja-loop UNNEST as hub_filing. Walkthrough: DBT_PIPELINE.md
+      section 8.
+    columns:
+      - name: link_company_filing_hk
+        description: |
+          SHA-256 hash of the concatenated business keys
+          (cik || '||' || accession_number), hex-encoded. Primary key
+          of the link by DV2.0 convention. The composite hash is what
+          makes the link table's join graph deterministic across
+          loads and across environments.
+        tests:
+          - not_null
+          - unique
+
+      - name: hub_company_hk
+        description: |
+          Foreign key into hub_company. SHA-256 hash of cik (single-key
+          chain, identical to hub_company.hub_company_hk).
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('hub_company')
+                field: hub_company_hk
+
+      - name: hub_filing_hk
+        description: |
+          Foreign key into hub_filing. SHA-256 hash of accession_number
+          (single-key chain, identical to hub_filing.hub_filing_hk).
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('hub_filing')
+                field: hub_filing_hk
+
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. Carried on the
+          link table alongside the FK hash so downstream consumers
+          can read the link without joining back to hub_company for
+          the business key.
+        tests:
+          - not_null
+
+      - name: accession_number
+        description: |
+          18-character SEC EDGAR accession number. Carried on the
+          link table alongside the FK hash so downstream consumers
+          can read the link without joining back to hub_filing for
+          the business key.
+        tests:
+          - not_null
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) recording the first observation of this
+          (cik, accession_number) relationship in the warehouse. Set
+          on insert, never updated.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          String identifier of the source system / dataset this link
+          row was first seen in. Constant 'sec_edgar.companyfacts'.
+        tests:
+          - not_null

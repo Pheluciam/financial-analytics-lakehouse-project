@@ -266,6 +266,12 @@ The Data Vault 2.0 audit-lineage column recording which source system / dataset 
 
 **In this project:** Constant `'sec_edgar.companyfacts'` on every hub_company row this session (single source). Becomes more interesting when a second source joins the lake.
 
+### **Composite hash key** `[Project 3]`
+
+A SHA-256 hash computed over multiple business-key columns concatenated with an explicit delimiter, used as the primary key of a Data Vault 2.0 link. The delimiter matters: it must be a string that cannot plausibly appear in any of the columns being concatenated, otherwise different input pairs can produce identical digests. AutomateDV's documented default is `'||'` (double-pipe); dbt_utils.generate_surrogate_key uses `'-'` (hyphen) and has a documented collision-on-hyphenated-inputs failure mode (dbt-utils issue #1015 — `'123-' + '-456'` digests identically to `'123' + '--456'`). Hyphens appear in many real-world business-key formats (SEC accession numbers, ISO date strings, UK national insurance numbers), so the hyphen delimiter is unsafe; pipe characters effectively never appear in regulatory identifiers.
+
+**In this project:** `to_hex(sha256(to_utf8(CAST(cik AS varchar) || '||' || CAST(accession_number AS varchar)))) AS link_company_filing_hk`. The `'||'` delimiter is the project standard for every composite hash in every future DV2.0 link (and any composite-parent satellite). Per-column CAST AS varchar inside the concatenation guards against future staging-side type changes silently breaking the hash. Locked at LEARNINGS Risk 6, 2026-05-28.
+
 ---
 
 ## 3. SQL & Database Concepts

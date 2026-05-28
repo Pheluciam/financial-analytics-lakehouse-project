@@ -15,10 +15,10 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 2 in progress.** Session 4 CLOSED 2026-05-28 — first warehouse-layer Data Vault 2.0 hub (hub_company) shipped end-to-end with hand-rolled SHA-256 hash key + source-side insert-only filter + Iceberg merge incremental; 6/6 dbt schema tests PASS, 9/9 SQL structural verify PASS, idempotency proven via second-run NO-OP. Two forward-projected risks banked (Risk 4 hash algorithm, Risk 5 hub insert-only semantics) BEFORE code shipped per the new phase-kickoff forward-verify rule. |
-| Next phase | Phase 2 session 5 — first link model (link_company_filing) connecting hub_company to a new hub_filing (accession_number business key). Establishes the link pattern + multi-hub composite hash key + same insert-only-via-source-side-filter semantics as hubs. Est. 60-90 min. |
-| Last session closed | 2026-05-28 (Phase 2 session 4 — CLOSE) |
-| Last bundled commit | 2026-05-28 — Phase 2 session 4 bundle (hub_company.sql + warehouse/_models.yml + dbt_project.yml warehouse-layer defaults block; sql/verify/03 9-check structural verify; DBT_PIPELINE.md section 8 expanded to 7 subsections covering DV2.0 framing, hand-rolled lock, hub_company walkthrough, hash-key construction, insert-only filter, verification surface, pattern reusability for future hubs/links/sats; GLOSSARY.md extended with 7 DV2.0 entries + 5 acronyms; LEARNINGS.md Risks 4 + 5 banked at forward-verify pass; warehouse/.gitkeep removed) |
+| Active phase | **Phase 2 in progress.** Session 5 CLOSED 2026-05-28 — second hub (hub_filing) + first link (link_company_filing) shipped end-to-end. Composite-hash construction over (cik, accession_number) with '||' delimiter, source-side insert-only filter on both, Iceberg merge incremental. 16/16 dbt schema tests PASS (6 hub_filing + 10 link including 2 relationships FK tests). 13/13 SQL structural verify PASS in 9.3 sec, 6,551 rows each (every accession_number matched to exactly one filer, as expected by SEC convention). Idempotency proven on both via second-run [OK 0]. Two new forward-projected risks banked (Risk 6 composite-hash delimiter, Risk 7 accession_number sourcing) BEFORE code shipped per the phase-kickoff forward-verify rule. |
+| Next phase | Phase 2 session 6 — first DV2.0 satellite. Likely sat_company_metadata (parent = hub_company, attributes = entity_name + future SIC/sector fields) OR sat_filing_metadata (parent = hub_filing, attributes = form_type / period_end_date / filed_date / fiscal_year / fiscal_period from companyfacts JSON). Establishes the SCD-2 insert-on-change pattern via hash-diff filter — same merge config and on_schema_change=ignore default as hubs/links carry over (LEARNINGS Risk 2 caveat). Est. 60-90 min for forward-verify pass + first sat + verify suite. |
+| Last session closed | 2026-05-28 (Phase 2 session 5 — CLOSE) |
+| Last bundled commit | 2026-05-28 — Phase 2 session 5 bundle (hub_filing.sql + link_company_filing.sql + warehouse/_models.yml extended with both; sql/verify/04 13-check structural verify covering hub_filing + link composite-hash determinism + FK closure + lineage parity; DBT_PIPELINE.md sections 8.8/8.9/8.10 covering hub_filing walkthrough, link composite-hash construction, verify/04 surface; GLOSSARY.md composite hash key entry; LEARNINGS.md Risks 6 + 7 banked at forward-verify pass + THIRD-miss amendment on the criterion-6 proactive-bypass entry — re-locked verify-then-write trigger to fire on first-use-of-test-type, not first-creation-of-file) |
 | Active blockers | None |
 | Open questions | None at the architectural level. |
 
@@ -88,6 +88,149 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-05-28 — Phase 2 session 5 — second hub (hub_filing) + first link (link_company_filing) + composite-hash construction + 13/13 structural verify PASS
+
+**Goal.** Ship the second DV2.0 hub (hub_filing, accession_number BK)
+and the first DV2.0 link (link_company_filing, composite hash over
+(cik, accession_number) with explicit delimiter). Establish the link
+pattern + multi-hub composite hash key + same insert-only-via-source-side-filter
+semantics as hubs. First activity = phase-kickoff forward-verify pass
+per ENGINEERING_STANDARDS.
+
+**Forward-verify pass (second time the rule applied).** Restricted-domain
+web-search-verify against scalefree.com (canonical DV2.0 + link-table
+best practices), automate-dv.readthedocs.io (hashing + concat_string
+default), github.com/dbt-labs/dbt-utils (generate_surrogate_key delimiter
++ issue #1015), docs.aws.amazon.com + trino.io (concat operator semantics
+on varchar), sec.gov/search-filings/edgar-application-programming-interfaces
+(companyfacts JSON structure + accn field). Surfaced 2 new forward-projected
+risks BEFORE any SQL shipped — banked in LEARNINGS as Risks 6 + 7 on top
+of the 5 already on the board. Total time on the pass: ~20 min. Earned
+its keep: both decisions (composite-hash '||' delimiter + companyfacts
+JSON sourcing instead of Phase 1 extract extension) drove the code design
+directly and avoided un-freezing Bronze mid-project.
+
+**What landed.**
+
+- **`dbt/models/warehouse/hub_filing.sql` shipped.** Second DV2.0 hub.
+  Business key = accession_number. Source = stg_sec_edgar__companyfacts_raw
+  via Jinja for-loop UNNEST across the same 8 in-scope XBRL concepts
+  as int_sec_edgar__concepts. 6,551 distinct accession_numbers across
+  the S&P 100 over the 10-year companyfacts history. Hash function
+  chain identical to hub_company (SHA-256 hex via to_hex(sha256(to_utf8(CAST(<bk>
+  AS varchar))))). Source-side is_incremental filter + unique_key safety
+  net carry from hub_company unchanged.
+- **`dbt/models/warehouse/link_company_filing.sql` shipped.** First
+  DV2.0 link. Composite hash key over (cik || '||' || accession_number)
+  — the '||' delimiter is the AutomateDV ecosystem default; picked over
+  dbt_utils' '-' delimiter which has a documented collision-on-hyphenated-inputs
+  failure mode (dbt-utils issue #1015) that bites SEC accession numbers
+  specifically (they contain literal hyphens in positions 11 and 14).
+  Carries hub_company_hk and hub_filing_hk as FK columns alongside the
+  composite link hash; each FK hash uses the same single-key chain as
+  its parent hub so FK joins are valid by construction. Source-side
+  UNNEST mirrors hub_filing.
+- **`dbt/models/warehouse/_models.yml` extended.** 16 new schema tests
+  total: hub_filing gets 6 (not_null x4 + unique x2 on hub_filing_hk
+  AND accession_number); link_company_filing gets 10 (not_null x7 +
+  unique x1 + relationships x2 — FK closure to hub_company and hub_filing
+  enforced at test time, not just verify-suite time).
+- **`sql/verify/04_phase2_warehouse_links_verification.sql` shipped.**
+  Parallel CTE PASS/FAIL pattern to verify/03. 13 checks: 5 on hub_filing
+  (hash-key uniqueness + not_null + length-64 + business-key uniqueness +
+  source-parity vs UNION-ALL'd source pairs), 8 on link_company_filing
+  (composite-hash uniqueness + not_null + length-64 + composite-hash
+  determinism reproducibility on Apple's lexicographically-smallest
+  accession_number + FK closure to both parent hubs + source-pair
+  lineage parity + business-key cardinality sanity). 13/13 PASS in
+  9.298 sec; 6,551 rows each in hub_filing and link_company_filing —
+  meaning every accession_number is associated with exactly one filer
+  (SEC convention proven empirically).
+- **DBT_PIPELINE.md sections 8.8 / 8.9 / 8.10 shipped.** 8.8 walks
+  through hub_filing's source + UNNEST + hash chain; 8.9 walks through
+  link_company_filing's composite hash construction + delimiter rationale
+  + FK hash chain + insert-only semantics carry from hubs (with Scalefree
+  source-link); 8.10 walks through verify/04's 13-check surface.
+- **GLOSSARY.md** — composite hash key entry added under section 2
+  DV2.0 group. Walks through the delimiter trade-off (||-vs-'-'),
+  the dbt-utils issue #1015 collision pattern, and the project standard.
+- **LEARNINGS.md** — 2 forward-projected risks banked at the kickoff
+  forward-verify pass (BEFORE any code shipped, per the rule):
+  Risk 6 (composite-hash delimiter choice — '||' over '-' to defeat
+  dbt-utils collision pattern on hyphenated accession numbers), Risk 7
+  (accession_number sourcing — companyfacts JSON accn field sufficient,
+  NO Phase 1 submissions-endpoint extract extension required, demo-durability
+  Bronze freeze preserved). Both with verified-against-authoritative-source
+  provenance + locked design decision + carry-forward principle. Plus
+  THIRD-miss amendment to the existing 2026-05-27 criterion-6-proactive-bypass
+  entry: the verify-then-write rule didn't fire AGAIN on the relationships
+  test introduction — re-locked the trigger to fire on first-use-of-test-type-in-project,
+  not first-creation-of-config-file.
+
+**Verification surface at session 5 close.**
+
+- 16/16 dbt schema tests PASS on session 5's new models (6 hub_filing
+  + 10 link)
+- 22/22 dbt schema tests PASS across the warehouse layer (cumulative —
+  6 hub_company + 16 new)
+- 13/13 SQL structural verify PASS for the link bundle (4.461 sec for
+  verify/03 + 9.298 sec for verify/04)
+- 22/22 SQL structural verify PASS across the warehouse layer
+  (cumulative — 9 verify/03 + 13 verify/04)
+- 2 dbt runs back-to-back per new model: first PASS=2 with CREATE TABLE
+  AS materialization, second PASS=2 with [OK 0] rows merged on both
+  (idempotency proven on the link composite-hash filter pattern, same
+  as hubs)
+- `dbt parse` clean after the in-session fix to the relationships test
+  argument nesting
+
+**Decisions locked this session (at the forward-verify pass).**
+
+- **Composite-hash delimiter = '||'** (AutomateDV ecosystem default).
+  Project standard for every composite hash in every future DV2.0 link
+  + composite-parent satellite. '-' delimiter explicitly rejected on
+  the dbt-utils issue #1015 collision pattern.
+- **Hub-filing source = stg_sec_edgar__companyfacts_raw** (honors the
+  session-4 lock that DV2.0 hubs source from the rawest layer where
+  the BK first appears). Phase 1 submissions-endpoint extract extension
+  explicitly rejected to preserve Bronze freeze.
+- **Link insert-only pattern = source-side is_incremental filter + unique_key
+  as engine-level safety net** (Scalefree-verified — links are pure
+  append-only). Same pattern as hubs; carries to future links unchanged.
+
+**Blockers / surprises.** One within-session warning — the
+MissingArgumentsPropertyInGenericTestDeprecation fired on the new
+relationships test arguments (third consecutive miss of the criterion-6
+proactive-bypass rule for new dbt YAML test types). Fixed in-session
+by nesting under `arguments:`. Banked as a THIRD-miss amendment to
+the existing LEARNINGS entry rather than a new entry. Zero engine-side
+debug loops; the forward-verify pass front-loaded every architectural
+call.
+
+**NOT in this session — deferred.**
+
+- **First DV2.0 satellite (sat_company_metadata OR sat_filing_metadata)**
+  → Phase 2 session 6. Different filter pattern (SCD-2 insert-on-change
+  via hash-diff between inbound row and latest satellite version for
+  the same parent), but same merge config + on_schema_change defaults.
+- **hub_concept + hub_period + remaining links** → Phase 2 session 6+
+  as needed by the Gold marts in Phase 4. May descope to the minimum
+  set that powers the 4 dashboard themes rather than the full Phase 0
+  list of 4 hubs + 3 links + 4 satellites.
+- **README.md Status line refresh** → Phase 2 close (per session 3 close
+  deferral, still parked).
+
+**Next session.** Phase 2 session 6 — first DV2.0 satellite. First
+activity = phase-kickoff forward-verify pass (now the standing pattern
+for every session that introduces a new architectural pattern). Scope:
+verify SCD-2 hash-diff filter idiom against Scalefree + AutomateDV docs,
+verify dbt-athena Iceberg merge behavior for satellite-shaped models
+(LEARNINGS Risk 2 caveat applies — on_schema_change must stay at
+default ignore), pick satellite parent (hub_company vs hub_filing),
+ship model + schema tests + verify/05. Est. 60-90 min.
+
+---
 
 ### 2026-05-28 — Phase 2 session 4 — first warehouse-layer DV2.0 hub (hub_company) + forward-verify pass + 9/9 structural verify PASS
 
