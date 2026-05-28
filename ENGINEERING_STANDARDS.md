@@ -93,12 +93,20 @@ Added 2026-05-14, mid-Phase-3-session-1. Yellow squigglies on `airflow/dags/m5_d
 
 Inputs match what the upstream source actually produces (verified, not assumed). Outputs match what downstream consumers expect. No mid-pipeline rework caused by a type mismatch that could have been caught up front.
 
+**Two dimensions of contract — both have to be audited (strengthened 2026-05-28).** Criterion 7 originally focused on data-shape contracts (column types, naming conventions, encoding, NULL conventions). The Project #3 Phase 2 session 3 debug loops (Bronze cik partition projection type=injected blocking dbt schema-test scans AND CTAS materialization) surfaced a second dimension that the shape-only audit didn't catch: **consumption-pattern contracts** — what query patterns will downstream tooling actually generate against this source, and does the source's partition projection / column type / SerDe / IAM scope SUPPORT those query patterns?
+
+Both dimensions now in scope at every audit:
+
+- **Data-shape contract.** Column types align across producer and consumer. Naming conventions match. Encoding consistent. NULL conventions agreed.
+- **Consumption-pattern contract.** Query patterns downstream tooling generates (dbt model SELECTs, dbt schema-test scans, CTAS materializations, BI tool refreshes, ad-hoc analyst queries) are SUPPORTED by the source's partition projection mode, SerDe behavior, IAM scope, materialization choice. At design time, name the consumers and the query shapes they'll generate; verify the source contract allows them.
+
 **Examples in this repo**
 
 - Before writing the loader, CSV headers were inspected directly (`head -1 calendar.csv` etc.) to confirm column names and ordering matched the DDL — no surprises during the load.
 - `raw.calendar.d` and `raw.sales_train.d` both `NVARCHAR(10)` — join key types match by design.
 - `DECIMAL(10,4)` chosen for `sell_price` rather than `FLOAT` — preserves exact monetary values through pandas → Snowflake → dbt without binary-rounding drift.
 - Case-sensitivity differences between Azure SQL (case-insensitive default) and Snowflake (case-sensitive default) flagged ahead of Phase 2 extract design — no surprise on the receiving end.
+- **Consumption-pattern example (Project #3 Phase 2 session 3).** Bronze cik partition projection was `type=injected` from Phase 1 session 3 — design-correct for the workload at that point (Phase 1 verify queries always named a specific CIK). dbt schema tests + dbt CTAS materialization were added downstream in Phase 2 — those query patterns do NOT include static cik filters, and Athena's injected projection mode rejects scans without one. The data-shape contract was fine throughout; the consumption-pattern contract was violated. Fix: switched both Bronze tables to `type=enum` with the 100 known CIKs enumerated. Carry-forward: when designing partition projection / SerDe / IAM scope at any layer, list the downstream tools that will scan this source and verify each tool's query pattern is supported by the chosen mode.
 
 ---
 
@@ -140,6 +148,40 @@ Long-running operations report what they are doing. Failures surface specifics, 
 
 - Both Python scripts print batch-by-batch progress (`Batch 3/5: CREATE TABLE raw.sell_prices...`).
 - The connect step explicitly warns about Free Serverless auto-pause: *"If the database has auto-paused, the first connect may take 30–60 seconds..."* — operator knows it's not frozen.
+
+---
+
+## Phase-kickoff forward-verify pass
+
+Added 2026-05-28 (Project #3 Phase 2 session 3 close). The per-script 10-criteria audit and the phase-boundary structural audit both happen AFTER work has shipped (or is about to ship). Today's session surfaced a real gap: the audits caught the data-shape contract issues correctly but missed the consumption-pattern contract issues that bit downstream — Bronze cik partition projection type=injected blocking dbt schema tests + CTAS materialization. The fix wasn't in the audit; it was in the absence of a design-time forward-projecting check.
+
+**The rule.** Before any phase work begins, run a restricted-domain web-search-verify pass against authoritative docs for the tools, patterns, and architectural decisions that phase will introduce. Surface known gotchas, version-specific limitations, and engine-vs-adapter behavior divergences at design time, not debug time.
+
+**Why this complements the existing audits.**
+
+- The 10-criteria per-script audit catches per-file quality issues at authoring time.
+- The phase-boundary structural audit catches aggregate consistency issues at phase close.
+- **The phase-kickoff forward-verify pass catches design-time assumptions that haven't yet been proven against current engine behavior** — the class of issue that surfaces mid-phase as "this thing the docs we read 6 months ago said should work, doesn't."
+
+**Scope per pass.** Whichever tools and patterns the upcoming phase introduces. Examples for Project #3:
+
+- Phase 2 warehouse-layer (DV2.0 hubs / links / satellites): verify AutomateDV vs hand-roll trade-off; Iceberg merge incremental strategy known issues; dbt-athena adapter quirks for the satellite pattern.
+- Phase 3 orchestration (Step Functions): verify Step Functions native task integrations; verify how dbt commands are invoked from Step Functions (no native integration — Lambda / ECS Fargate / Glue Python Shell trade-off); IAM execution role pattern.
+- Phase 4 forecasting + marts: verify Python forecasting library footprint on AWS Free Tier; Power BI Athena connector Iceberg compatibility; mart-shape PBI smoke test pattern carry-forward.
+- Phase 5 PBI: verify Athena ODBC vs JDBC driver pattern for PBI; Iceberg PBI Import-mode compatibility.
+- Phase 6 CI/CD: verify GitHub Actions for dbt-athena (different from Project #2's dbt-snowflake); sqlfluff Athena dialect support.
+
+**Restricted-domain discipline.** Authoritative source priority: engine's own docs (docs.aws.amazon.com for AWS, trino.io for Trino/Athena SQL, docs.getdbt.com for dbt-core, vendor docs for everything else) FIRST. Adapter / wrapper docs (dbt-athena adapter docs, package READMEs) are secondary references — useful for orientation but can lag the underlying engine's current behavior. The format_version Iceberg property rejected by Athena despite the adapter docs recommending it (Project #3 Phase 2 session 3 LEARNINGS entry) is the canonical example of why engine docs win.
+
+**Outputs.** Findings banked in LEARNINGS.md under a "Phase N projected risks" subsection BEFORE the phase begins. Each entry: the risk, the source verification, the proposed mitigation. Mitigations are then baked into PROJECT_PLAN.md section 9 (Phase breakdown) so the design decisions are explicit in the plan, not surprise mid-phase.
+
+**When to run.**
+
+- At the **start of each phase**, before any phase work ships. Ideally as the first activity of the phase's kickoff session.
+- **Re-run** when a phase introduces a new architectural pattern mid-flow (e.g., session 3 added Iceberg materialization mid-Phase 2; that triggered a small mid-phase verify pass on Iceberg-specific quirks).
+- **Not run** for trivial within-phase iteration that doesn't introduce new tooling.
+
+**Time budget.** 15-30 minutes of focused web-search-verify per phase kickoff. Cheap insurance against mid-phase debug loops that cost hours.
 
 ---
 
@@ -276,4 +318,4 @@ The structure of this project is deliberately documentation-heavy in support of 
 
 ---
 
-*Last updated: 2026-05-23 (Project #3 Phase 0 closeout — cross-project applicability note added at the top; doc otherwise unchanged from Project #2's v1.0 ship state; Project #3 examples added as phases ship). Prior milestones: 2026-05-22 (Project #2 Phase 6 close — v1.0 ship audit appended; 3 new CI files passed all 10 criteria, 0 findings); 2026-05-16 (Project #2 Phase 4 session 4 — added "Phase-boundary structural audit" section; first applied in that session and caught two real findings); 2026-05-14 (Project #2 Phase 3 session 1 — added criterion 6, Dev environment hygiene). First applied to Project #2 Phase 1 deliverables: `smoke_test_azure_sql.py`, `01_create_raw_tables.sql`, `create_raw_tables.py`.*
+*Last updated: 2026-05-28 (Project #3 Phase 2 session 3 close-amend — criterion 7 strengthened to cover consumption-pattern contracts in addition to data-shape contracts; new "Phase-kickoff forward-verify pass" section added between failsafes and structural audit). Prior milestones: 2026-05-23 (Project #3 Phase 0 closeout — cross-project applicability note added at the top); 2026-05-22 (Project #2 Phase 6 close — v1.0 ship audit appended); 2026-05-16 (Project #2 Phase 4 session 4 — added "Phase-boundary structural audit" section); 2026-05-14 (Project #2 Phase 3 session 1 — added criterion 6, Dev environment hygiene). First applied to Project #2 Phase 1 deliverables: `smoke_test_azure_sql.py`, `01_create_raw_tables.sql`, `create_raw_tables.py`.*

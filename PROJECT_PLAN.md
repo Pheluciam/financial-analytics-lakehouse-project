@@ -196,7 +196,9 @@ Power BI reads Gold marts via Athena's native connector in Import mode.
 
 ## 7. Data Vault 2.0 modeling pattern
 
-Brief explainer; full reference in GLOSSARY.md and (to be added) DBT_PIPELINE.md.
+Brief explainer; full reference in GLOSSARY.md and DBT_PIPELINE.md.
+
+**Implementation approach (locked 2026-05-28 after phase-kickoff forward-verify pass).** Data Vault 2.0 hubs / links / satellites for Project #3 are HAND-ROLLED in plain dbt-athena SQL — NOT via the AutomateDV (formerly dbtvault) package. Verified against automate-dv.readthedocs.io Platform Support page: AutomateDV officially supports Snowflake, BigQuery, MS SQL Server, Databricks, Postgres; Athena is not on the supported list and not on the planned list. The hand-rolled approach is the stronger portfolio story regardless — recruiters see pattern understanding (you can write a SCD-2 satellite from scratch), not just library usage. Full diagnosis loop banked in LEARNINGS.md "Forward-projected risks" subsection.
 
 **Hubs** hold the unique business keys of entities. Planned hubs:
 
@@ -287,8 +289,8 @@ Numbered Phase 1 onward; Phase 0 is the planning phase closing now.
 |---|---|---|
 | **Phase 0** (closing 2026-05-23) | Planning + lock | PROJECT_PLAN.md, PROJECT_CONTEXT.md, LEARNING_ROADMAP.md updates, ENGINEERING_STANDARDS.md context note, LEARNINGS.md carry-forward, Phase 0 audit |
 | **Phase 1** | Bronze landing | `scripts/extract_sec_edgar.py`, polite rate limiter, step-up testing (1 → 10 → 100 companies), S3 bucket + IAM, Glue Crawler bootstrap, Bronze verification suite, `EXTRACT_PIPELINE.md`. AWS account creation happens at this phase, not Phase 0. |
-| **Phase 2** | Silver — Data Vault 2.0 | `dbt/` scaffolding (`dbt_project.yml`, `profiles.yml.example`, `packages.yml`, sources), staging models 1:1 with Bronze, intermediate models doing XBRL canonical-concept normalisation, warehouse models for hubs / links / satellites, schema tests, `DBT_PIPELINE.md` (Silver section) |
-| **Phase 3** | Step Functions orchestration | `stepfunctions/state_machine.json`, IAM execution role, on-demand trigger (no schedule per demo-durability principle 2), `ORCHESTRATION_PIPELINE.md` |
+| **Phase 2** | Silver — Data Vault 2.0 | `dbt/` scaffolding (`dbt_project.yml`, `profiles.yml.example`, `packages.yml`, sources), staging models 1:1 with Bronze, intermediate models doing XBRL canonical-concept normalisation, warehouse models for hubs / links / satellites (HAND-ROLLED in plain dbt-athena SQL — AutomateDV does not support Athena per the 2026-05-28 forward-verify pass), schema tests, `DBT_PIPELINE.md` (Silver section). **Known gotcha for satellites** (banked 2026-05-28): Iceberg merge incremental strategy + on_schema_change setting has a duplicate-insertion bug (dbt-adapters issue #571); satellite models must avoid on_schema_change and carefully control unique_key composition (hub_hashkey + load_datetime), with parity-count verification after every satellite refresh. |
+| **Phase 3** | Step Functions orchestration | `stepfunctions/state_machine.json`, IAM execution role, on-demand trigger (no schedule per demo-durability principle 2), `ORCHESTRATION_PIPELINE.md`. **First session = forward-verify pass + dbt-runtime decision** (added 2026-05-28): Step Functions has no native dbt integration; dbt-athena must be invoked from Step Functions via one of three runtimes — Glue Python Shell (preferred, lowest IAM expansion), Lambda Container Image (fallback if Glue has dbt-specific issues), or ECS Fargate (cleanest container model, highest deployment overhead). Decision locks at Phase 3 kickoff. Step Functions otherwise integrates natively with Athena (StartQueryExecution / GetQueryExecution) for direct Athena query orchestration. |
 | **Phase 4** | Gold marts + forecasting | 4 mart models in dbt, `scripts/forecast.py` producing Parquet for `mart_growth_forecast`, mart-shape smoke test against Power BI for EACH mart at creation time (Project #2 carry-forward), `GOLD_MARTS_PIPELINE.md`, `DBT_PIPELINE.md` (Gold section) |
 | **Phase 5** | Power BI | 5-page `.pbix` (executive overview + 4 themed pages), `_Measures` table, explicit DAX measures, continuous publish to git, theme picked early, `POWERBI_PIPELINE.md` |
 | **Phase 6** | CI/CD + ship | GitHub Actions (ruff F821, dbt parse, sqlfluff), `README.md` polish + architecture diagram + screen recording, `DEMO_RUNBOOK.md`, `.pbix` freeze, v1.0 tag |
@@ -414,7 +416,4 @@ Snowflake XS→XL warehouse decision pain — bookmarked at task #9):**
 
 ---
 
-*Last updated: 2026-05-23 (Phase 0 closeout — initial authoring). Updated as each
-phase closes; the file IS the single-page source of truth for "what we're
-building." Deliberation history of changes lives in LEARNING_ROADMAP.md
-"Notes / changes" section, not here.*
+*Last updated: 2026-05-28 (Phase 2 session 3 close-amend — section 7 updated with hand-rolled DV2.0 approach after AutomateDV/Athena verify; section 9 Phase 2 entry annotated with Iceberg-merge-incremental gotcha; Phase 3 entry annotated with dbt-runtime decision required at kickoff). Prior milestone: 2026-05-23 (Phase 0 closeout — initial authoring). Updated as each phase closes; the file IS the single-page source of truth for "what we're building." Deliberation history of changes lives in LEARNING_ROADMAP.md "Notes / changes" section, not here.*

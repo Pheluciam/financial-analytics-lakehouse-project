@@ -217,8 +217,49 @@ on diagnosis (per the in-session debug discipline):
 
 **Next session.** Phase 2 session 4 — first warehouse-layer Data Vault 2.0
 model: hub_company (cik as business key). Iceberg incremental materialization
-with merge strategy. Establishes the DV2.0 pattern that link_company_filing,
-sat_company_metadata, etc. follow in subsequent sessions. Est. 60-90 min.
+with merge strategy. **Hand-rolled DV2.0 in plain dbt-athena SQL** (NOT
+AutomateDV — verified 2026-05-28 that AutomateDV doesn't support Athena).
+Establishes the DV2.0 pattern that link_company_filing, sat_company_metadata,
+etc. follow in subsequent sessions. **First activity of session 4 = phase-kickoff
+forward-verify pass** per the new ENGINEERING_STANDARDS rule banked
+2026-05-28. Est. 60-90 min for hub_company + verify pass.
+
+**Session-3 close-amend (added 2026-05-28 post-commit f4c95b9).** After the
+main session-3 commit was pushed, Phil challenged the criterion-7 audit
+discipline given today's debug loops surfaced query-pattern issues the
+data-shape-only audit didn't catch. Drove a forward-projected risk pass +
+deep dive into AU job market + reset of the learning roadmap. Resulting
+changes shipped in a second bundled commit on top of f4c95b9 (separate
+commit, not amend — no force-push of pushed history):
+
+- **ENGINEERING_STANDARDS.md** — criterion 7 strengthened to cover
+  consumption-pattern contracts in addition to data-shape contracts
+  (the gap that bit Phase 2 session 3); new "Phase-kickoff forward-verify
+  pass" section added as a standing project rule.
+- **LEARNINGS.md** — 3 forward-projected risk entries banked (AutomateDV
+  doesn't support Athena; Iceberg merge incremental + on_schema_change
+  has a known duplicate-insertion bug; Step Functions has no native dbt
+  integration — Glue Python Shell vs Lambda Container Image trade-off
+  for Phase 3).
+- **PROJECT_PLAN.md** — section 7 (DV2.0) annotated with hand-rolled
+  approach; section 9 (Phase breakdown) Phase 2 entry annotated with
+  Iceberg-merge gotcha and Phase 3 entry annotated with dbt-runtime
+  decision required at kickoff.
+- **LEARNING_ROADMAP.md** — major reset of mini-projects lineup +
+  training journey scope + career target context after AU market deep
+  dive (Precision Sourcing 2026 + Robert Half / Hays salary guides +
+  SEEK Melbourne sample). Mini-projects: DROPPED Databricks and Streaming
+  slots; ADDED T-SQL + Microsoft stack and dbt patterns deep-dive. Final
+  5-slot lineup: dbt Cloud + CI/CD → T-SQL + MS stack → Fabric end-to-end
+  → dbt patterns deep-dive → Iceberg vs Delta. Timing target locked at
+  4-5 days per mini-project. Training journey: dbt-heavy weighting,
+  Python recalibrated to basic-to-intermediate (was "Python for DE"
+  foundations + advanced), Phil-drives-the-keyboard pattern locked
+  (inverts watch-Claude-type-it-up from Projects #1-3), interview-prep
+  intensive added as week 8. Career targets: dropped Analytics Engineer
+  (US-coined, low AU volume), primary targets are Senior DA with
+  pipeline / BI Developer / BI Engineer / Senior Reporting Analyst in
+  Melbourne volume order, Data Engineer remains longer-term stretch.
 
 ---
 
@@ -949,8 +990,9 @@ Repo-config:
 
 ---
 
-*Last updated: 2026-05-28 (Phase 2 session 3 close — canonical-concept
-reconciliation shipped, intermediate layer flipped to Iceberg tables,
-Bronze cik partition projection switched to type=enum, verification suite
-11/11 PASS reconciling Apple's FY16-FY21 revenues across the ASC 606
-discontinuity). Append a session-log entry at every session close.*
+*Last updated: 2026-05-28 (Phase 2 session 3 close-amend — first commit
+shipped canonical-concept reconciliation + Iceberg flip + Bronze enum;
+amend commit shipped forward-projected risk pass + AU-market-aligned
+learning roadmap + ENGINEERING_STANDARDS criterion-7 strengthening + new
+phase-kickoff forward-verify rule). Append a session-log entry at every
+session close.*

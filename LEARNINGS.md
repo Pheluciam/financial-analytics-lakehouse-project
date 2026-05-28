@@ -290,6 +290,49 @@ move fast, ship.
 
 **Lesson.** Athena's COLUMN_NOT_FOUND error message tacks on "or requester is not authorized to access requested resources" as boilerplate, regardless of whether IAM is actually involved. The wording is misleading: 99% of the time the real cause is SQL projection (column truly doesn't exist in the CTE, OR exists in the underlying table but was excluded from an upstream subquery, OR is misspelled, OR has a different case than the engine expects). IAM denials emit a different error class entirely (`AccessDeniedException`, with `User is not authorized to perform athena:...` wording from STS/IAM, not from query planning). Standing diagnostic rule: when you see COLUMN_NOT_FOUND in Athena, check the SQL projection chain BEFORE reaching for IAM. Cheapest check: is the column actually in the CTE / subquery / view that the error line references? If yes, then escalate to type mismatch or case sensitivity; if no, fix the projection. Interview talking point on error-message literacy: "When a tool's error message mentions permissions but I have admin access, the message wording is usually misleading and the actual cause is in the SQL/code I just wrote."
 
+### Forward-projected risks for Phase 2 remainder + Phase 3 (banked 2026-05-28, Phase 2 session 3 close-amend)
+
+These aren't diagnosis-fix-lesson loops — the issues haven't bitten yet. They're risks surfaced by the first-ever phase-kickoff forward-verify pass (ENGINEERING_STANDARDS.md new section, added same day) against authoritative docs. Each is captured BEFORE the corresponding phase work begins so the design decisions land deliberately, not reactively. Mitigations baked into PROJECT_PLAN.md sections 7 and 9 same commit.
+
+#### Risk 1 — AutomateDV does NOT officially support dbt-athena (Phase 2 warehouse layer)
+
+**Verified against authoritative source.** automate-dv.readthedocs.io/en/latest/platform_support/ Platform Support page enumerates supported platforms: Snowflake (primary), Google BigQuery, MS SQL Server, Databricks, Postgres. Redshift listed as planned/in-progress. **Athena is not on the supported list and not on the planned list.** AutomateDV's macros (hub, link, sat, eff_sat, ma_sat, xts, pit, bridge) cannot be safely assumed to work on dbt-athena.
+
+**Implication.** Phase 2 session 4+ warehouse-layer Data Vault 2.0 (hub_company, link_company_filing, sat_company_metadata, etc.) will be hand-rolled in plain dbt-athena SQL — NOT via AutomateDV macros. The hand-rolled approach is actually a stronger portfolio story: shows pattern understanding (you can write a SCD-2 satellite from scratch), not just library use (you typed `{{ dbtvault.sat(...) }}` and trusted the macro). Cross-link the LEARNINGS entry to PROJECT_PLAN.md section 7 (DV2.0 modeling pattern) where the hand-rolled approach is now explicit.
+
+**Carry-forward principle.** For any dbt portfolio project on a non-mainstream adapter (dbt-athena, dbt-trino, dbt-fabric, etc.), check the platform-support pages of the major modeling packages BEFORE assuming they're available. The "we'll just use dbtvault / AutomateDV" default is unsafe outside Snowflake / BigQuery / SQL Server / Databricks / Postgres.
+
+#### Risk 2 — Iceberg merge incremental + on_schema_change has a known duplicate-insertion bug
+
+**Verified against authoritative source.** dbt-adapters issue #571 (and related dbt-glue issues) document that Iceberg merge incremental strategy with on_schema_change settings does NOT correctly update rows — instead inserts duplicates. Mentioned in passing in the dbt-athena merge docs but the failure mode bites at runtime, not parse time.
+
+**Implication.** Data Vault 2.0 satellites are SCD-2-by-construction — every attribute change inserts a new satellite row with a new load_datetime, and the unique key is (hub_hashkey, load_datetime). Duplicates in satellite tables corrupt the audit lineage that's the whole point of DV2.0. Risk is real for Phase 2 session 4+ satellite implementations.
+
+**Mitigations going into PROJECT_PLAN.md section 9 Phase 2 entry.**
+
+- Do NOT set on_schema_change on satellite models (leave at default `ignore`).
+- Carefully control unique_key composition: (hub_hashkey, load_datetime) is the natural satellite key. Test with parity counts (source row count vs satellite incremental insert count) after every satellite refresh.
+- Add a row-count sanity check to the verification suite at the satellite layer that catches duplicates within a single load batch.
+- If schema evolution becomes required on a satellite mid-lifecycle, do a full-refresh rebuild rather than relying on on_schema_change.
+
+#### Risk 3 — AWS Step Functions has NO native dbt integration (Phase 3 orchestration)
+
+**Verified against authoritative source.** docs.aws.amazon.com/step-functions/latest/dg/connect-athena.html confirms Step Functions has native task-type integration with Athena (StartQueryExecution, GetQueryExecution, GetQueryResults). docs.getdbt.com Quickstart for dbt and Amazon Athena confirms dbt is invoked as a Python process via the dbt CLI. **Step Functions cannot natively invoke dbt commands.** Any Step Functions state machine that orchestrates dbt-athena requires a runtime container for the dbt process.
+
+**Implication.** Phase 3 (orchestration via Step Functions) has a non-trivial architectural design call that the 2026-05-23 phase plan didn't surface. Three viable runtimes for dbt-athena invoked from Step Functions:
+
+| Runtime | Pros | Cons |
+|---|---|---|
+| **AWS Lambda** | Serverless, $0 idle, pay-per-invocation. Fits demo-durability principle 4. | 250 MB unzipped Lambda layer + code limit is tight for dbt-core + dbt-athena + pyathena + the dbt project files. May require packaging discipline (Lambda Container Image format, up to 10 GB) to fit. |
+| **AWS Glue Python Shell** | Serverless, ~$0.44/DPU-hour, fits within Free Plan budget for portfolio scale. Native Python runtime with pip-installable deps. | Adds Glue ETL service to the project's IAM scope. |
+| **AWS ECS Fargate (one-off task)** | Clean container model; no layer-size constraints. | Adds ECR + ECS to the IAM scope and the deployment story; container build complexity. |
+
+**Recommended at this point (subject to Phase 3 kickoff verification):** AWS Glue Python Shell. Lowest IAM expansion (already have AWSGlueServiceRole-financial-analytics-lakehouse from Phase 1), no container-build overhead, fits the Free Plan budget, serverless pay-per-second. Lambda Container Image is the backup if Glue Python Shell has dbt-specific gotchas surfacing during Phase 3 kickoff.
+
+**Mitigation going into PROJECT_PLAN.md section 9 Phase 3 entry.** Explicit design call documented up front: "Phase 3 first session = forward-verify pass + dbt-runtime choice between Glue Python Shell (preferred) and Lambda Container Image (fallback)." No surprise mid-phase.
+
+---
+
 ### Banked open items from session 1 (not lessons, but trackable)
 
 - **Free Plan cliff: 23 Nov 2026.** AWS account converts to paid OR
