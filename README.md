@@ -4,11 +4,13 @@
 > medallion (S3 + Glue + Athena) → 5-page Power BI executive overview.
 > Project #3 of Phil's data engineering portfolio.
 
-**Status:** Phase 1 complete (2026-05-25) — Bronze frozen. Full S&P 100
-SEC EDGAR companyfacts landing on S3 (101 objects, 100 distinct CIKs across
-2 extract_date partitions), verified by an 11-check surface (5 boto3 S3
-metadata + 6 Athena SQL). Phase 2 (Silver Data Vault 2.0 via dbt-athena)
-next.
+**Status:** Phase 2 complete (2026-05-29) — Silver Data Vault 2.0 frozen.
+Hand-rolled DV2.0 in dbt-athena: Raw Vault (3 hubs + 2 links + 4 satellites
+incl. 1 multi-active sat) + Business Vault (1 dim + 1 PIT + 1 Bridge),
+12 models total, materialized as Iceberg over Parquet. Verification surface
+all-green: 121/121 dbt schema tests + 114/114 SQL structural checks across
+12 verify files. Phase 3 (Step Functions orchestration with dbt-on-Glue-Python-Shell
+runtime) next.
 
 ---
 

@@ -628,6 +628,70 @@ Result: 101 rows / 100 distinct CIKs / 2 distinct extract_dates / 100 distinct e
 
 ---
 
+### Phase 2 reflection — 23 Risks rolled into eight pattern families (banked 2026-05-29, Phase 2 session 11 close)
+
+Phase 2 banked 23 forward-projected Risks across 8 sessions of forward-verify passes (sessions 3-10). The list is now too long to scan as a flat reference for the post-mini-projects training journey. Rolling them into eight top-level pattern families — each carries forward as a generalisable lesson for the four remaining portfolio projects + the five mini-projects + the training journey. Risks remain individually banked above as design-decision provenance; this section is the consolidated training surface.
+
+**Family 1 — Adapter-vs-engine discipline.** Adapter wrapper docs (dbt-athena recommending `format_version`; AutomateDV not officially supporting dbt-athena) can be stale or off-target relative to the underlying cloud engine. Risks 1 and 2. **Carry-forward.** Engine docs (docs.aws.amazon.com, trino.io) are the source of truth; adapter docs are orientation. Verify against engine before shipping any adapter-recommended config that touches engine internals.
+
+**Family 2 — DV2.0 hash discipline + defensive shielding.** Hash chains over multi-column payload need COALESCE-to-sentinel against NULL propagation in the engine's concat semantics; SCD-2 anti-join needs latest-per-parent partition; satellite hash key chain extends from parent hub hash. Risk 8 + sessions 4-7 carry-forward decisions. **Carry-forward.** Defensive sentinel, parent-extending hash chain, anti-join on latest-hashdiff are the three load-bearing primitives for every future hand-rolled Data Vault.
+
+**Family 3 — Forward-verify-then-write discipline.** Every new architectural pattern (hub class, link class, sat class, PIT, Bridge, MAS) needs a kickoff forward-verify pass against authoritative docs PLUS an empirical four-aggregate cardinality probe (COUNT(*) / COUNT(DISTINCT BK) / COUNT(DISTINCT extract_date) / COUNT(DISTINCT payload)) against actual source data BEFORE the model body is written. Risks 12 (the original miss), 13 (the rule), and the verify-then-write sub-note on diagnostic table identifiers. **Carry-forward.** Doc-verify + empirical probe = standard kickoff activity for any genuinely new pattern in any future project.
+
+**Family 4 — Cardinality-first object-class selection.** The shape of the data (distinct cardinality of candidate keys, ratio of source rows to distinct natural tuples, presence of stable source-provided type codes) drives object-class selection: hub vs payload (Risk 14), standard link vs NHL (Risk 15), post-collapse DISTINCT (Risk 16), CDK = stable type code vs sub-sequence fallback (Risk 18), as-of-dates grain = mart-time grain (Risk 21). **Carry-forward.** Probe distinct cardinality before architecting; let observed grain drive object class, not architectural-pattern catalogues.
+
+**Family 5 — Scope discipline at design time + explicit deferral framing.** Pattern-canonical features that don't earn their keep for the project's actual scope get deferred indefinitely with explicit framing, not silently omitted: hub_period (Risk 14), eff_sat columns on Bridge (Risk 20), ghost-records on sats (Risk 22), degenerate MAS payload acknowledgment (Risk 17). **Carry-forward.** When canonical-pattern feature X doesn't materialize value for the project's scope, name the deferral and the rationale in the model body + LEARNINGS — silent omission reads as oversight at portfolio walkthrough time; explicit deferral reads as senior judgment.
+
+**Family 6 — Temporal semantics fidelity.** Canonical DV2.0 load_datetime = source observation time; project simplification of load_datetime = dbt-run wall clock breaks PIT/Bridge for any historical as_of_date. Risk 23. **Carry-forward.** Implement observation-time load_datetime from day one in any future portfolio Data Vault, OR explicitly route PIT/Bridge through a source-observation-date column with the deviation documented in the model body.
+
+**Family 7 — Honest framing over pattern-padding.** PIT pattern materializes value at 2+ sats per parent. Single-sat Raw Vault gets ONE demonstrative PIT on the most-consumed parent, framed honestly — not one PIT per parent to inflate the warehouse. Risk 19. **Carry-forward.** When a canonical pattern needs N+ inputs to materialize value and the project only has N, ship one demonstrative instance with the framing explicit in walkthrough docs. Pattern proliferation without value is portfolio-anti-pattern.
+
+**Family 8 — Runtime-architecture trade-offs for tool-on-cloud orchestration.** Choosing dbt's host (Glue Python Shell vs Lambda Container Image vs ECS Fargate) is a trade-off across IAM surface, timeout cap, cold-start, dep-install model, and Free-Tier fit. Risk 3 + the session 11 lock. **Carry-forward.** For any tool-on-cloud orchestration choice, evaluate against (a) timeout cap vs expected runtime, (b) IAM expansion, (c) cold-start vs cadence, (d) dep install path, (e) cost-tier fit. Default to the simplest shape that fits actual workload; container-and-VPC complexity is the production-overkill option, not the safe default.
+
+---
+
+### Phase 3 forward-projected risks (banked 2026-05-29, Phase 2 session 11 — Phase 3 kickoff forward-verify pass)
+
+Six new Risks surfaced at the Phase 3 kickoff forward-verify pass against AWS Step Functions, dbt programmatic invocation, AWS Glue Python Shell, and AWS Lambda Container Image documentation. Banked BEFORE Phase 3 work begins, per the standing forward-verify-pass rule.
+
+#### Risk 24 — dbt-core does not support safe parallel execution in the same process; multi-invocation fan-out requires subprocess wrapping (banked 2026-05-29, Phase 2 session 11 — Phase 3 kickoff forward-verify)
+
+**Verified against authoritative source.** docs.getdbt.com/reference/programmatic-invocations explicitly states: "dbt-core doesn't support safe parallel execution for multiple invocations in the same process. This means it's not safe to run multiple dbt commands concurrently. It's officially discouraged and requires a wrapping process to handle sub-processes." Reason: each dbt-core command interacts with global Python variables; concurrent invocations against the same data platform have undefined behavior.
+
+**Implication.** Phase 3 orchestration design — Step Functions can invoke ONE Glue Python Shell job at a time that runs ONE `dbtRunner().invoke(["build"])` call. Multi-step fan-out (e.g., parallel `dbt run --select` against disjoint subsets) cannot run inside one Python process. Carry-forward principle for any future portfolio project doing dbt-from-orchestrator: each orchestrator step is one dbt invocation in one process. Fan-out happens at the orchestrator level (Step Functions parallel branches launching separate Glue jobs), not inside Python.
+
+#### Risk 25 — `dbtRunnerResult.result` object internals are partially documented and "liable to change in future versions of dbt-core"; pin dbt-core version + treat result as exit-code-only (banked 2026-05-29, Phase 2 session 11 — Phase 3 kickoff forward-verify)
+
+**Verified against authoritative source.** docs.getdbt.com/reference/programmatic-invocations "Commitments & Caveats" section: "the objects returned by each command in `dbtRunnerResult.result` are not fully contracted, and therefore liable to change... These additional fields and methods should be considered internal and liable to change in future versions of dbt-core."
+
+**Implication.** The Glue Python Shell job's success criterion should be `dbtRunnerResult.success` (bool) + the CLI exit code (0/1/2) — NOT field-level inspection of `result.results[*].node.status` or any other internal structure. The dbt-core version pinned in `--additional-python-modules` becomes a stability contract; bumping dbt-core requires re-validating Step Functions failure-detection logic. Carry-forward to any programmatic dbt invocation: treat `dbtRunnerResult` as a coarse-grained success/failure signal, leave structured event introspection to dbt's `EventManager` callback API which has a separate stability contract.
+
+#### Risk 26 — AWS Glue Python Shell 3.6 sunset 2026-03-01; only Python 3.9 is supported for Phase 3 (banked 2026-05-29, Phase 2 session 11 — Phase 3 kickoff forward-verify)
+
+**Verified against authoritative source.** docs.aws.amazon.com/glue/latest/dg/add-job-python.html top-of-page note: "Support for Pyshell v3.6 will end on March 1, 2026." Same page confirms Python 3.9 is the current supported version with 480-minute (8-hour) default timeout on Glue v5+ — 32x Lambda's 15-minute hard cap.
+
+**Implication.** Phase 3 Glue Python Shell jobs are authored against Python 3.9. Compatible with current `requirements.txt` (Python 3.11 locally; dbt-core + dbt-athena are 3.9+ compatible). Carry-forward: when adopting a managed Python runtime on a cloud service, check the runtime's lifecycle stage before authoring — managed runtimes have shorter EOL cycles than expected (Python 3.6 sunset is mid-Phase-3 timeline if Phase 3 had slipped).
+
+#### Risk 27 — dbt-athena + dbt-core dependency install via `--additional-python-modules` adds cold-start time to every Glue Python Shell job run; first-run timing validation required (banked 2026-05-29, Phase 2 session 11 — Phase 3 kickoff forward-verify)
+
+**Verified against authoritative source + project state.** docs.aws.amazon.com/glue/latest/dg/add-job-python.html confirms `--additional-python-modules` triggers pip3 install at job start (not cached across runs). Project's existing dbt-athena adapter footprint includes dbt-core + dbt-athena + pyathena + boto3 + cryptography transitives. pyathena 2.5.3 IS pre-installed in Glue's analytics library set, narrowing the install delta to dbt-core + dbt-athena + their direct transitives.
+
+**Implication.** First Glue Python Shell job at Phase 3 kickoff measures cold-start install time as a baseline — if install adds >2 minutes to a ~30-second dbt build, consider building a Glue-compatible wheel layer OR switching to ECS Fargate with a pre-baked container. For our daily-run cadence at Phase 3 scope, 60-second install + 30-second dbt build = 90-second total run is fully acceptable; flagging only as a baseline-measurement task at first job creation, not a pre-decision blocker. Carry-forward to any managed-runtime + tool-with-deps choice: measure cold-start dep-install time on the first run, decide ahead-of-time whether to optimize via wheel layer / container image / pre-baked AMI based on actual cadence.
+
+#### Risk 28 — AWS Lambda's 15-minute hard execution cap is a forward-projection blocker as dbt build duration grows; explicit reason Lambda Container Image was rejected at the runtime lock (banked 2026-05-29, Phase 2 session 11 — Phase 3 kickoff forward-verify)
+
+**Verified against authoritative source.** docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html: "Code can run for up to 15 minutes in a single invocation" + Function timeout table row: "900 seconds (15 minutes)" — flagged as cannot-be-changed (hard quota).
+
+**Implication.** Current Phase 2 dbt build at 12 models + 121 schema tests runs in ~30-40 seconds — well inside 15 minutes. Phase 4 marts add 5+ models. Mini-project work would add more. At unknown future scale, 15-minute cap could bite without warning. Glue Python Shell's 480-minute cap removes the cap entirely as a concern. Documented as the load-bearing reason Lambda Container Image was rejected at the runtime direction-check, in addition to senior-DE-default factors. Carry-forward to any future serverless-runtime choice: pick timeout caps that accommodate the SCALED workload, not the prototype workload. 15 minutes is fine until it isn't, and "until it isn't" is a 3am page in production.
+
+#### Risk 29 — Step Functions Athena native `.sync` integration runs RAW SQL queries, not dbt orchestration; complementary pattern to dbt-on-Glue-Python-Shell (banked 2026-05-29, Phase 2 session 11 — Phase 3 kickoff forward-verify)
+
+**Verified against authoritative source.** docs.aws.amazon.com/step-functions/latest/dg/connect-athena.html: Step Functions Athena optimized integration's `.sync` pattern supports `StartQueryExecution` only — submits a SQL string to Athena and waits for execution to complete. Not dbt orchestration; dbt produces SQL DDL/DML which Athena executes, but Step Functions calling Athena directly skips the dbt-compile step entirely.
+
+**Implication.** Step Functions Phase 3 state machine has TWO complementary task patterns: (a) Glue Python Shell task running `dbtRunner().invoke(["build"])` for dbt orchestration; (b) Athena `.sync` tasks for raw SQL verify queries (sql/verify/03-12 style structural PASS/FAIL checks). Clean separation: dbt does transformation + tests; Step Functions Athena tasks do post-build verification. IAM auto-generated for Athena task; Glue task uses our existing phil-dbt-style Customer Managed Policy. Carry-forward principle for any cloud-orchestrator with native integrations: enumerate which orchestration steps need a compute host (transformations, custom logic) vs which are direct service calls (SQL execution, file operations, notifications) — native integrations reduce IAM surface for the second class, leave compute hosts for the first.
+
+---
+
 ### Banked open items from session 1 (not lessons, but trackable)
 
 - **Free Plan cliff: 23 Nov 2026.** AWS account converts to paid OR
