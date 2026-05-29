@@ -1,0 +1,100 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "S3LakehouseRead",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetBucketLocation", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::phil-financial-analytics-lakehouse",
+        "arn:aws:s3:::phil-financial-analytics-lakehouse/*"
+      ]
+    },
+    {
+      "Sid": "S3SilverAndAthenaResultsWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": [
+        "arn:aws:s3:::phil-financial-analytics-lakehouse/zone=silver/*",
+        "arn:aws:s3:::phil-financial-analytics-lakehouse/athena-results/*"
+      ]
+    },
+    {
+      "Sid": "AthenaQueryExecution",
+      "Effect": "Allow",
+      "Action": [
+        "athena:StartQueryExecution",
+        "athena:StopQueryExecution",
+        "athena:GetQueryExecution",
+        "athena:GetQueryResults",
+        "athena:GetQueryResultsStream",
+        "athena:GetWorkGroup",
+        "athena:BatchGetQueryExecution",
+        "athena:ListQueryExecutions",
+        "athena:GetDataCatalog"
+      ],
+      "Resource": [
+        "arn:aws:athena:us-east-1:470439680370:workgroup/wg_financial_analytics",
+        "arn:aws:athena:us-east-1:470439680370:datacatalog/awsdatacatalog"
+      ]
+    },
+    {
+      "Sid": "GlueCatalogSilverReadWrite",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetDatabase",
+        "glue:GetDatabases",
+        "glue:GetTable",
+        "glue:GetTables",
+        "glue:GetTableVersions",
+        "glue:GetPartition",
+        "glue:GetPartitions",
+        "glue:CreateTable",
+        "glue:UpdateTable",
+        "glue:DeleteTable",
+        "glue:CreatePartition",
+        "glue:UpdatePartition",
+        "glue:DeletePartition",
+        "glue:BatchCreatePartition",
+        "glue:BatchDeletePartition"
+      ],
+      "Resource": [
+        "arn:aws:glue:us-east-1:470439680370:catalog",
+        "arn:aws:glue:us-east-1:470439680370:database/financial_analytics_silver",
+        "arn:aws:glue:us-east-1:470439680370:table/financial_analytics_silver/*"
+      ]
+    },
+    {
+      "Sid": "GlueCatalogBronzeRead",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetDatabase",
+        "glue:GetTable",
+        "glue:GetTables",
+        "glue:GetPartition",
+        "glue:GetPartitions"
+      ],
+      "Resource": [
+        "arn:aws:glue:us-east-1:470439680370:catalog",
+        "arn:aws:glue:us-east-1:470439680370:database/financial_analytics_bronze",
+        "arn:aws:glue:us-east-1:470439680370:table/financial_analytics_bronze/*"
+      ]
+    },
+    {
+      "Sid": "CloudWatchLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:AssociateKmsKey"
+      ],
+      "Resource": "arn:aws:logs:us-east-1:470439680370:log-group:/aws-glue/python-jobs/*"
+    }
+  ]
+}

@@ -18,21 +18,18 @@ config-version: 2
 # Links this project to the matching named profile in profiles.yml
 profile: "financial_analytics_athena"
 
-# Suppress dbt-core 1.11 CustomKeyInConfigDeprecation false positives.
-# dbt-core's deprecation check fires on adapter-specific NESTED config keys
-# (table_properties.format_version for dbt-athena Iceberg here) even though
-# the key is documented and adapter-supported. Confirmed false positive —
-# see dbt-labs/dbt-core issues #12314, #12342, #12355, #12087. Moving
-# format_version under config.meta (the warning's suggested fix) would
-# break dbt-athena's Iceberg materialization because dbt-athena reads
-# table_properties from config.table_properties, not config.meta. Silencing
-# here preserves ENGINEERING_STANDARDS criterion-6 zero-warning hygiene
-# until dbt-labs ships the fix. Revisit on the next dbt-core minor bump.
-flags:
-  warn_error_options:
-    silence:
-      - CustomKeyInConfigDeprecation
-      - DeprecationsSummary
+# NOTE — the Phase 2 silence block for CustomKeyInConfigDeprecation +
+# DeprecationsSummary was REMOVED at Phase 3 session 12 (2026-05-29) when
+# dbt-core was pinned to 1.9.10 to align with Glue Python Shell's Python 3.9
+# ceiling (Risk 26). Both error names were registered in dbt-core 1.10/1.11
+# and are NOT present in 1.9.x — including them under flags.warn_error_options.silence
+# fails strict validation at parse-time on 1.9.x. The underlying
+# false-positive warning also doesn't fire on 1.9.x, so silencing is unnecessary.
+# If dbt-core is later bumped back to 1.10+ (e.g., after AWS Glue Python
+# Shell adopts Python 3.10), restore the flags block. Banked as Risk 30
+# context in LEARNINGS — managed-runtime Python floor pin can drag the
+# adapter version backward and force project-config re-validation against
+# the older dbt-core release line.
 
 # Folder paths — dbt defaults retained for portability
 model-paths: ["models"]

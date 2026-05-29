@@ -1,0 +1,29 @@
+{
+  "Comment": "financial-analytics-orchestrator — Phase 3 dbt-athena build orchestration. Sequence: Glue Python Shell runs dbtRunner build (Risk 24 one process per invocation, Risk 25 exit-code-only success), then Athena .sync runs a complementary raw-SQL verify query against the Silver layer (Risk 29 complementary pattern, NOT a dbt run). Session 13 fans out to all 10 sql/verify/03-12 queries via a Parallel state.",
+  "StartAt": "RunDbtBuildOnGlue",
+  "States": {
+    "RunDbtBuildOnGlue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "financial-analytics-dbt-build"
+      },
+      "ResultPath": "$.glueRun",
+      "Next": "VerifyHubCompanyRowCount"
+    },
+    "VerifyHubCompanyRowCount": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "SELECT COUNT(*) AS hub_company_row_count FROM financial_analytics_silver.hub_company",
+        "WorkGroup": "wg_financial_analytics",
+        "QueryExecutionContext": {
+          "Catalog": "awsdatacatalog",
+          "Database": "financial_analytics_silver"
+        }
+      },
+      "ResultPath": "$.verifyHubCompany",
+      "End": true
+    }
+  }
+}

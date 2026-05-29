@@ -1,0 +1,74 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "GlueStartJobRunSync",
+      "Effect": "Allow",
+      "Action": [
+        "glue:StartJobRun",
+        "glue:GetJobRun",
+        "glue:GetJobRuns",
+        "glue:BatchStopJobRun"
+      ],
+      "Resource": "arn:aws:glue:us-east-1:470439680370:job/financial-analytics-dbt-build"
+    },
+    {
+      "Sid": "AthenaStartQueryExecutionSync",
+      "Effect": "Allow",
+      "Action": [
+        "athena:StartQueryExecution",
+        "athena:StopQueryExecution",
+        "athena:GetQueryExecution",
+        "athena:GetQueryResults",
+        "athena:GetWorkGroup",
+        "athena:BatchGetQueryExecution",
+        "athena:GetDataCatalog"
+      ],
+      "Resource": [
+        "arn:aws:athena:us-east-1:470439680370:workgroup/wg_financial_analytics",
+        "arn:aws:athena:us-east-1:470439680370:datacatalog/awsdatacatalog"
+      ]
+    },
+    {
+      "Sid": "S3LakehouseReadForAthenaVerify",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:ListBucketMultipartUploads"
+      ],
+      "Resource": [
+        "arn:aws:s3:::phil-financial-analytics-lakehouse",
+        "arn:aws:s3:::phil-financial-analytics-lakehouse/*"
+      ]
+    },
+    {
+      "Sid": "S3AthenaResultsWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": "arn:aws:s3:::phil-financial-analytics-lakehouse/athena-results/*"
+    },
+    {
+      "Sid": "GlueCatalogReadForAthenaVerify",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetDatabase",
+        "glue:GetDatabases",
+        "glue:GetTable",
+        "glue:GetTables",
+        "glue:GetPartition",
+        "glue:GetPartitions"
+      ],
+      "Resource": [
+        "arn:aws:glue:us-east-1:470439680370:catalog",
+        "arn:aws:glue:us-east-1:470439680370:database/financial_analytics_silver",
+        "arn:aws:glue:us-east-1:470439680370:table/financial_analytics_silver/*"
+      ]
+    }
+  ]
+}

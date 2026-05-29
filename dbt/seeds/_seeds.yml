@@ -59,8 +59,7 @@ seeds:
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values:
-                  - 'income_statement'
-                  - 'balance_sheet'
-                  - 'cash_flow'
+              values:
+                - 'income_statement'
+                - 'balance_sheet'
+                - 'cash_flow'

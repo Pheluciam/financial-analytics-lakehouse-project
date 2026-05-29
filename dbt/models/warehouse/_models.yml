@@ -165,9 +165,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_company')
-                field: hub_company_hk
+              to: ref('hub_company')
+              field: hub_company_hk
 
       - name: hub_filing_hk
         description: |
@@ -176,9 +175,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_filing')
-                field: hub_filing_hk
+              to: ref('hub_filing')
+              field: hub_filing_hk
 
       - name: cik
         description: |
@@ -258,10 +256,9 @@ models:
       # forward-verify pass (criterion-6 proactive bypass per the
       # THIRD-miss locked rule, LEARNINGS 2026-05-27 entry).
       - dbt_utils.unique_combination_of_columns:
-          arguments:
-            combination_of_columns:
-              - hub_filing_hk
-              - load_datetime
+          combination_of_columns:
+            - hub_filing_hk
+            - load_datetime
     columns:
       - name: sat_filing_metadata_hk
         description: |
@@ -302,9 +299,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_filing')
-                field: hub_filing_hk
+              to: ref('hub_filing')
+              field: hub_filing_hk
 
       - name: accession_number
         description: |
@@ -403,10 +399,9 @@ models:
       # pass against github.com/dbt-labs/dbt-utils/blob/main/macros/
       # generic_tests/unique_combination_of_columns.sql).
       - dbt_utils.unique_combination_of_columns:
-          arguments:
-            combination_of_columns:
-              - hub_company_hk
-              - load_datetime
+          combination_of_columns:
+            - hub_company_hk
+            - load_datetime
     columns:
       - name: sat_company_metadata_hk
         description: |
@@ -444,9 +439,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_company')
-                field: hub_company_hk
+              to: ref('hub_company')
+              field: hub_company_hk
 
       - name: cik
         description: |
@@ -595,27 +589,24 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_company')
-                field: hub_company_hk
+              to: ref('hub_company')
+              field: hub_company_hk
 
       - name: hub_filing_hk
         description: Foreign key into hub_filing. SHA-256 hash of accession_number.
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_filing')
-                field: hub_filing_hk
+              to: ref('hub_filing')
+              field: hub_filing_hk
 
       - name: hub_concept_hk
         description: Foreign key into hub_concept. SHA-256 hash of canonical_concept.
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_concept')
-                field: hub_concept_hk
+              to: ref('hub_concept')
+              field: hub_concept_hk
 
       - name: cik
         description: |
@@ -713,10 +704,9 @@ models:
       Walkthrough: DBT_PIPELINE.md section 8.
     tests:
       - dbt_utils.unique_combination_of_columns:
-          arguments:
-            combination_of_columns:
-              - link_filing_concept_period_hk
-              - load_datetime
+          combination_of_columns:
+            - link_filing_concept_period_hk
+            - load_datetime
     columns:
       - name: sat_concept_value_hk
         description: |
@@ -746,9 +736,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('link_filing_concept_period')
-                field: link_filing_concept_period_hk
+              to: ref('link_filing_concept_period')
+              field: link_filing_concept_period_hk
 
       - name: cik
         description: |
@@ -881,11 +870,10 @@ models:
       # sat_concept_canonical_hk enforces the same uniqueness at engine
       # level via merge.
       - dbt_utils.unique_combination_of_columns:
-          arguments:
-            combination_of_columns:
-              - hub_concept_hk
-              - sub_sequence_key
-              - load_datetime
+          combination_of_columns:
+            - hub_concept_hk
+            - sub_sequence_key
+            - load_datetime
     columns:
       - name: sat_concept_canonical_hk
         description: |
@@ -934,9 +922,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_concept')
-                field: hub_concept_hk
+              to: ref('hub_concept')
+              field: hub_concept_hk
 
       - name: canonical_concept
         description: |

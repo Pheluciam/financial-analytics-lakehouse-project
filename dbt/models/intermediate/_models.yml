@@ -41,16 +41,15 @@ models:
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values:
-                  - 'Revenues'
-                  - 'SalesRevenueNet'
-                  - 'RevenueFromContractWithCustomerExcludingAssessedTax'
-                  - 'RevenueFromContractWithCustomerIncludingAssessedTax'
-                  - 'NetIncomeLoss'
-                  - 'Assets'
-                  - 'Liabilities'
-                  - 'StockholdersEquity'
+              values:
+                - 'Revenues'
+                - 'SalesRevenueNet'
+                - 'RevenueFromContractWithCustomerExcludingAssessedTax'
+                - 'RevenueFromContractWithCustomerIncludingAssessedTax'
+                - 'NetIncomeLoss'
+                - 'Assets'
+                - 'Liabilities'
+                - 'StockholdersEquity'
 
       - name: unit
         description: |
@@ -60,8 +59,7 @@ models:
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values: ['USD']
+              values: ['USD']
 
       - name: period_start_date
         description: |
@@ -142,13 +140,12 @@ models:
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values:
-                  - 'revenue'
-                  - 'net_income'
-                  - 'assets'
-                  - 'liabilities'
-                  - 'stockholders_equity'
+              values:
+                - 'revenue'
+                - 'net_income'
+                - 'assets'
+                - 'liabilities'
+                - 'stockholders_equity'
 
       - name: business_area
         description: |
@@ -158,11 +155,10 @@ models:
         tests:
           - not_null
           - accepted_values:
-              arguments:
-                values:
-                  - 'income_statement'
-                  - 'balance_sheet'
-                  - 'cash_flow'
+              values:
+                - 'income_statement'
+                - 'balance_sheet'
+                - 'cash_flow'
 
       - name: unit
         description: |

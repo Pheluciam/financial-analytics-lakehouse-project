@@ -95,10 +95,9 @@ models:
       section 8.22-8.23.
     tests:
       - dbt_utils.unique_combination_of_columns:
-          arguments:
-            combination_of_columns:
-              - link_filing_concept_period_hk
-              - as_of_date
+          combination_of_columns:
+            - link_filing_concept_period_hk
+            - as_of_date
     columns:
       - name: pit_link_filing_concept_period_hk
         description: |
@@ -121,9 +120,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('link_filing_concept_period')
-                field: link_filing_concept_period_hk
+              to: ref('link_filing_concept_period')
+              field: link_filing_concept_period_hk
 
       - name: as_of_date
         description: |
@@ -135,9 +133,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('dim_as_of_dates')
-                field: as_of_date
+              to: ref('dim_as_of_dates')
+              field: as_of_date
 
       - name: sat_concept_value_pk
         description: |
@@ -197,10 +194,9 @@ models:
       section 8.24-8.25.
     tests:
       - dbt_utils.unique_combination_of_columns:
-          arguments:
-            combination_of_columns:
-              - link_filing_concept_period_hk
-              - as_of_date
+          combination_of_columns:
+            - link_filing_concept_period_hk
+            - as_of_date
     columns:
       - name: bridge_company_concept_period_hk
         description: |
@@ -221,9 +217,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_company')
-                field: hub_company_hk
+              to: ref('hub_company')
+              field: hub_company_hk
 
       - name: hub_filing_hk
         description: |
@@ -231,9 +226,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_filing')
-                field: hub_filing_hk
+              to: ref('hub_filing')
+              field: hub_filing_hk
 
       - name: hub_concept_hk
         description: |
@@ -241,9 +235,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('hub_concept')
-                field: hub_concept_hk
+              to: ref('hub_concept')
+              field: hub_concept_hk
 
       - name: link_company_filing_hk
         description: |
@@ -252,9 +245,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('link_company_filing')
-                field: link_company_filing_hk
+              to: ref('link_company_filing')
+              field: link_company_filing_hk
 
       - name: link_filing_concept_period_hk
         description: |
@@ -264,9 +256,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('link_filing_concept_period')
-                field: link_filing_concept_period_hk
+              to: ref('link_filing_concept_period')
+              field: link_filing_concept_period_hk
 
       - name: period_end_date
         description: |
@@ -296,9 +287,8 @@ models:
         tests:
           - not_null
           - relationships:
-              arguments:
-                to: ref('dim_as_of_dates')
-                field: as_of_date
+              to: ref('dim_as_of_dates')
+              field: as_of_date
 
       - name: load_datetime
         description: |

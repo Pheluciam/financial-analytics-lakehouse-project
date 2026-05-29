@@ -19,3 +19,11 @@ requests>=2.31.0
 # backwards-compat distribution name; the underlying package is dbt-athena,
 # now maintained by dbt Labs in the dbt-labs/dbt-adapters monorepo.
 dbt-athena-community>=1.10.1
+
+# dbt-core upper bound — Phase 3 orchestration constraint. dbt-core 1.11+
+# requires Python >=3.10, but Glue Python Shell maxes out at Python 3.9
+# (Risk 26). Pinning dbt-core to the 1.10.x line keeps the local venv
+# byte-aligned with the Glue runtime per Risk 25's stability contract.
+# Banked as Risk 30 (Phase 3 session 12) — managed-runtime Python ceiling
+# vs tool Python floor cross-check at every adapter-or-tool version bump.
+dbt-core>=1.10.0,<1.11

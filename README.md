@@ -4,13 +4,17 @@
 > medallion (S3 + Glue + Athena) → 5-page Power BI executive overview.
 > Project #3 of Phil's data engineering portfolio.
 
-**Status:** Phase 2 complete (2026-05-29) — Silver Data Vault 2.0 frozen.
-Hand-rolled DV2.0 in dbt-athena: Raw Vault (3 hubs + 2 links + 4 satellites
-incl. 1 multi-active sat) + Business Vault (1 dim + 1 PIT + 1 Bridge),
-12 models total, materialized as Iceberg over Parquet. Verification surface
-all-green: 121/121 dbt schema tests + 114/114 SQL structural checks across
-12 verify files. Phase 3 (Step Functions orchestration with dbt-on-Glue-Python-Shell
-runtime) next.
+**Status:** Phase 3 session 12 shipped (2026-05-29) — first end-to-end
+orchestrated dbt-on-Glue-Python-Shell via AWS Step Functions LIVE.
+State machine `financial-analytics-orchestrator`: Glue StartJobRun.sync
+(dbt host) → Athena StartQueryExecution.sync (raw SQL verify). First
+orchestrated run Succeeded in 4m 59s; inside the Glue task dbt build
+PASS=157 / ERROR=0 / SKIP=0 / TOTAL=157 (9 incremental + 1 seed + 5 table
++ 2 view models + 140 data tests). Phase 2 Silver Data Vault 2.0
+(3 hubs + 2 links + 4 sats incl. 1 multi-active + 1 dim + 1 PIT + 1 Bridge,
+121/121 dbt schema + 114/114 SQL structural verify) preserved underneath.
+Phase 3 session 13 (verify-side fan-out from 1 Athena task to 10 via a
+Parallel state) next.
 
 ---
 
