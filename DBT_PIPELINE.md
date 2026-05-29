@@ -1349,6 +1349,199 @@ canonical_concept; regulators get raw-tag traceability via
 sub_sequence_key. Both queries hit the same hub_concept and
 share the same DV2.0 audit-lineage contract.
 
+### 8.22 Business Vault layer — PIT + Bridge query helpers (Phase 2 session 10)
+
+The Raw Vault (sessions 4-9) records the authoritative SEC EDGAR
+data with full DV2.0 audit-lineage semantics — hubs for entity
+identity, links for relationships, satellites for change history.
+Reading the Raw Vault for analytical queries works but pays a
+JOIN tax: every Phase 4 mart_pl_trend or mart_peer_benchmark
+query traverses hub_company → link_company_filing → hub_filing →
+link_filing_concept_period → hub_concept + sat_concept_value to
+pull a single (company, concept, period, value) tuple — five
+table joins for one fact.
+
+The **Business Vault** is the Scalefree-canonical layer between
+the Raw Vault and Phase 4 information marts that flattens those
+joins into pre-computed query helpers. Two object classes:
+
+- **PIT (Point-In-Time) tables** — per-as-of-date snapshots that
+  pre-resolve "for parent X at this snapshot date, which satellite
+  row's coordinates apply?" Replaces the SCD-2 latest-row anti-join
+  every mart query would otherwise repeat at runtime with a single
+  equi-join lookup.
+- **Bridge tables** — pre-computed hub-link-hub navigation paths
+  for a given as-of-date. Replaces the multi-link walk with a
+  single table scan.
+
+Both rebuilt on every dbt run (not historized — they're query
+helpers, not source of truth). Both source-driven exclusively
+from the Raw Vault (no new source data; pure derivations).
+
+**Three forward-projected risks banked at the kickoff forward-verify
+pass** (BEFORE code shipped), each refining the locked direction:
+
+- **Risk 19** — PIT pattern's value materializes at 2+ sats per
+  parent. Our Raw Vault is single-sat per parent everywhere.
+  Decision: ship ONE PIT against the most-consumed parent (link
+  spine + sat_concept_value), framed honestly as
+  demonstrative-of-pattern rather than padding-the-warehouse.
+- **Risk 20** — AutomateDV's Bridge structure assumes Effectivity
+  Satellites per link relationship; we don't ship eff_sats
+  (insert-only links, no end-date semantics). Scalefree Bridge
+  Tables 101 confirms the simpler shape is correct fit.
+- **Risk 21** — As-of-dates list cardinality directly multiplies
+  PIT/Bridge row counts. Picked fiscal-year-end (10 rows) over
+  fiscal-quarter-end (38 rows) — ~600K-row artefacts vs 3.4M+,
+  matches Phase 4 annual mart query patterns.
+
+A fourth Risk surfaced during the model-body design phase:
+
+- **Risk 22** — Ghost-record pattern (zero hash key + epoch ldts
+  for "no sat at as-of-date") deferred indefinitely; retrofitting
+  to 4 already-shipped sats was out-of-scope. Hand-rolled
+  substitute: LEFT JOIN + NULL on sat-side columns; Phase 4
+  marts handle the NULL via standard COALESCE.
+
+And a fifth, structurally significant — surfaced during the model-body
+sat-coordinate resolution phase:
+
+- **Risk 23** — The project's `load_datetime` captures dbt-run wall
+  clock time (every row stamped May 2026), not the SEC filing's
+  observation date. Naively applied to a canonical PIT with
+  `MAX(sat.load_datetime) <= as_of_date`, every as_of_date 2016-2025
+  resolves to ZERO visible rows. Decision: PIT and Bridge join
+  through `hub_filing → sat_filing_metadata` to access `filed_date`
+  and use `filed_date <= as_of_date` as the visibility filter.
+  Documented as a project-specific deviation from canonical PIT
+  semantics; load_datetime is preserved on the BV rows as the
+  canonical lineage column.
+
+**The as-of-dates spine — `dim_as_of_dates`.** A 10-row
+`VALUES`-driven model carrying fiscal year-end dates 2016-12-31
+through 2025-12-31. Both PIT and Bridge cross-join against this
+spine to materialize the temporal-snapshot dimension. Materialized
+as a plain Iceberg table (full rebuild every run).
+
+### 8.23 PIT walkthrough — pit_link_filing_concept_period
+
+Single-sat PIT on the project's most-queried Raw Vault object.
+Per row: `(link_filing_concept_period_hk, as_of_date,
+sat_concept_value_pk, sat_concept_value_ldts)` plus the single-column
+surrogate `pit_link_filing_concept_period_hk` (SHA-256 of the
+composite). Composite natural PK
+`(link_filing_concept_period_hk, as_of_date)` enforced at test time.
+
+Model body in 4 CTEs:
+
+1. **as_of** — `SELECT as_of_date FROM dim_as_of_dates` (10 rows).
+2. **link_with_filed_date** — inner-join `link_filing_concept_period`
+   to `sat_filing_metadata` via `hub_filing_hk` to bring `filed_date`
+   onto each link row. 1:1 join (sat_filing_metadata is 1:1 with
+   hub_filing per session 6) — no cardinality fan-out.
+3. **sat_coordinates** — `CROSS JOIN as_of × link_with_filed_date`,
+   then `LEFT JOIN sat_concept_value ON link_pk`, filtered to
+   `filed_date <= as_of_date`. LEFT JOIN is the ghost-record-deferral
+   substitute (Risk 22).
+4. **hashed** — compute the surrogate PIT hash via SHA-256 over
+   the composite, project final shape with `load_datetime` and
+   `record_source`.
+
+Build result: **OK 634,431 rows in 29.96s** on session 10's first
+dbt run. The 70.6% theoretical-max ratio (634,431 / 898,210)
+reflects the `filed_date <= as_of_date` filter correctly excluding
+filings filed after each early-decade as_of_date.
+
+### 8.24 Bridge walkthrough — bridge_company_concept_period
+
+Bridge spans the 5-hop hub-link-hub walk: hub_company →
+link_company_filing → hub_filing → link_filing_concept_period →
+hub_concept. Per row: 3 hub hash-key FKs + 2 link hash-key FKs +
+3 period-payload columns (period_end_date, fiscal_year,
+fiscal_period) + as_of_date + lineage. Single-column surrogate
+`bridge_company_concept_period_hk` (4-component composite SHA-256:
+hub_company_hk + link_company_filing_hk + link_filing_concept_period_hk
++ as_of_date). Composite natural PK
+`(link_filing_concept_period_hk, as_of_date)` — the link PK
+already captures the 7-column (cik, accession, canonical, period_*)
+composite, so combining with as_of_date is uniquely identifying.
+
+Model body in 5 CTEs:
+
+1. **as_of** — same as PIT.
+2. **link_with_filed_date** — same as PIT.
+3. **link_walk** — inner-join `link_with_filed_date` to
+   `link_company_filing` on the composite `(hub_company_hk,
+   hub_filing_hk)` to bring `link_company_filing_hk` onto each row.
+   1:1 join (link_company_filing is 1:1 with (cik, accn) per
+   session 5).
+4. **bridge_rows** — `CROSS JOIN link_walk × as_of`, filtered to
+   `filed_date <= as_of_date`. Every row = "this (company, filing,
+   concept, period) relationship was visible at this as_of_date."
+5. **hashed** — compute the surrogate bridge hash via SHA-256
+   over the 4-component composite, project final shape.
+
+Build result: **OK 634,431 rows in 30.27s** on session 10's first
+dbt run — identical count to the PIT by construction (both share
+the same link × as_of_date × filed_date visibility filter, differing
+only in projection).
+
+### 8.25 Verification surface for Business Vault + cumulative stats
+
+Three model contracts shipped in `dbt/models/business_vault/_models.yml`:
+
+- **dim_as_of_dates** — 6 schema tests (as_of_date unique + not_null;
+  as_of_datetime, fiscal_year_end, load_datetime, record_source
+  not_null).
+- **pit_link_filing_concept_period** — 9 schema tests (8 column-level
+  including sat_concept_value_pk LEFT-JOIN-nullable per Risk 22,
+  plus model-level `dbt_utils.unique_combination_of_columns` on the
+  composite natural PK).
+- **bridge_company_concept_period** — 18 schema tests (17 column-level
+  including 5 FK `relationships` tests covering full hub-link-hub
+  closure, plus model-level composite-PK test).
+
+**33/33 dbt schema tests PASS** on the 3 new models in 39.34 sec.
+
+Two new verify files extending the established CTE PASS/FAIL pattern:
+
+- `sql/verify/11_phase2_business_vault_pit_verification.sql` — 11 checks:
+  pit_hk unique + not_null + length 64, FK closures to link + as_of_dates,
+  composite PK uniqueness, distinct as_of_date count = 10, monotonic
+  coverage sanity (first as_of_date row count ≤ last), pit_hk
+  determinism on Apple sample, non-null sat FK closure, record_source
+  constant. **11/11 PASS in 3.85 sec.**
+- `sql/verify/12_phase2_business_vault_bridge_verification.sql` — 13
+  checks: bridge_hk unique + not_null + length 64, FK closures to 3
+  hubs + 2 links + dim_as_of_dates (6 FK closures total), composite
+  PK uniqueness, distinct as_of_date count = 10, bridge_hk determinism
+  on Apple sample, record_source constant. **13/13 PASS in 7.96 sec.**
+
+**Idempotency proven.** Third `dbt run` rebuilt all 3 BV models
+with identical 634,431 row counts on both PIT and Bridge. Table
+materialization (not Iceberg-merge incremental) means rebuild is
+the only path — by construction, hash determinism + deterministic
+JOIN + deterministic WHERE filter guarantee byte-identical content
+across runs. Structurally avoids Risk 2 (Iceberg merge +
+on_schema_change duplicate-insertion bug) because no merge happens.
+
+**Cumulative warehouse + business-vault layer at session 10 close:**
+
+- 3 hubs + 2 links + 4 sats (Raw Vault) + 1 dim + 1 PIT + 1 Bridge
+  (Business Vault) = **11 models**
+- **121 dbt schema tests PASS** (88 cumulative through session 9 +
+  33 new — 6 dim + 9 PIT + 18 Bridge)
+- **114 SQL structural verify checks PASS** (90 cumulative through
+  session 9 + 24 new — 11 PIT + 13 Bridge)
+
+The Business Vault layer is the bridge between DV2.0's audit-lineage
+contract and downstream analytical convenience. Phase 4 marts will
+join through the BV layer instead of walking the Raw Vault, collapsing
+5-hop traversals to single equi-joins while preserving the Raw
+Vault's immutable history underneath. The trade-off is honest:
+634K-row BV artefacts cost storage to save query compute — a worthwhile
+trade at the analytical layer, irrelevant at the audit layer.
+
 ## 9. Verification surface (per session)
 
 Each dbt session ships with a verification suite parallel to Phase 1's

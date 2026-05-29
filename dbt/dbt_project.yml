@@ -108,6 +108,21 @@ models:
       +table_type: iceberg
       +format: parquet
       +on_schema_change: ignore
+    # business_vault — iceberg table: Scalefree-canonical PIT + Bridge
+    #   query-helper layer between Raw Vault and Phase 4 marts. NOT historized
+    #   (PIT/Bridge are rebuilt every refresh — load_datetime captures the
+    #   build run, the data inside is a system-computed snapshot). Plain
+    #   table materialization (not incremental + merge) because there's
+    #   no SCD-2 to preserve and no insert-only contract to enforce —
+    #   each dbt run is a full refresh. on_schema_change inapplicable to
+    #   the non-merge path so the Risk 2 (LEARNINGS 2026-05-28) Iceberg
+    #   merge bug class is structurally avoided here. ACTIVE: Phase 2
+    #   session 10 onwards (first BV objects: dim_as_of_dates +
+    #   pit_link_filing_concept_period + bridge_company_concept_period).
+    business_vault:
+      +materialized: table
+      +table_type: iceberg
+      +format: parquet
 
 # Seed defaults — version-controlled reference CSVs under seeds/.
 # Phase 2 session 3 onwards. Materializes as Parquet on S3 via the
