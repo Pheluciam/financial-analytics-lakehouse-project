@@ -15,12 +15,12 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 3 session 13 SHIPPED 2026-05-29.** Verify-side fan-out shipped. State machine extended: RunDbtBuildOnGlue → VerifyHubCompanyRowCount (sanity) → VerifyStructuralSurface (Parallel, 10 branches over sql/verify/03-12) → End. All 10 branches use `athena:startQueryExecution.sync` against `wg_financial_analytics` / `awsdatacatalog` / `financial_analytics_silver`. PascalCase branch names map to model/layer intent (VerifyWarehouseHubCompany, VerifyWarehouseLinks, VerifyWarehouseSatellites, VerifySatCompanyMetadata, VerifyHubConcept, VerifyLinkFilingConceptPeriod, VerifySatConceptValue, VerifySatConceptCanonical, VerifyBusinessVaultPit, VerifyBusinessVaultBridge). State machine definition 80,239 bytes (92% headroom under 1 MB ASL cap). **Restricted-domain doc-verify pass against docs.aws.amazon.com Step Functions Parallel state + service quotas surfaced Risk 36 (Parallel fail-fast on sibling errors) BEFORE first orchestrated run.** **First orchestrated run: ExecutionFailed at VerifyWarehouseLinks** — Athena `glue:GetDatabase` AccessDeniedException on `financial_analytics_bronze` because verify 04 queries `financial_analytics_silver.stg_sec_edgar__companyfacts_raw` which is a STORED VIEW whose body references the Bronze raw table; Athena resolves the view under the Step Functions execution role's identity and the role was Silver-only scoped per session 12. Risk 37 banked (Step Functions role's Glue Catalog scope must include EVERY Catalog database transitively reachable via stored-view resolution, not just databases named in FROM clauses) — Risk 34 reprise on a different IAM role. Fix: added `glue:GetDatabase + glue:GetTable + glue:GetPartitions` on `database/financial_analytics_bronze` + `table/financial_analytics_bronze/*` to GlueCatalogReadForAthenaVerify Sid in `stepfunctions/iam_policies/stepfunctions_policy.json`. Policy version replaced in IAM Console (lakehouse-stepfunctions-runtime-policy). **Second orchestrated run: Succeeded in 6m 15s, 78 state transitions, all 10 Parallel branches TaskSucceeded, ParallelStateSucceeded.** Phase 2 cumulative 114-check SQL structural verify surface (sessions 4-10) now reproduced on every orchestrated dbt build. Risk 36 confirmed live at first-run failure: sibling-abort propagated within ~25 ms after VerifyWarehouseLinks failed (8 in-flight siblings → TaskStateAborted). 10/10 ENGINEERING_STANDARDS audit PASS on stepfunctions/state_machine.json — SIX-session unbroken streak (sessions 8/9/10/11/12/13). DBT_PIPELINE.md section 6.1 + GLOSSARY.md section 6 (7 Phase 3 vocab entries) updated. |
-| Next phase | **Phase 3 session 14.** Phase 3 CLOSE + Phase 4 kickoff forward-verify pass (Python forecasting library footprint vs AWS Free Tier, Power BI Athena connector Iceberg compatibility, mart-shape PBI smoke test pattern carry-forward). Possibly merged with Phase 4 session 1 (mart_pl_trend kickoff). |
-| Last session closed | 2026-05-29 (Phase 3 session 13 — verify-side fan-out SHIPPED) |
-| Last bundled commit | 2026-05-29 — Phase 3 session 13 bundle (stepfunctions/state_machine.json Parallel fan-out + stepfunctions/iam_policies/stepfunctions_policy.json Bronze Catalog read + LEARNINGS Risks 36+37 banked + DBT_PIPELINE.md 6.1 Phase 3 ref + GLOSSARY.md section 6 Phase 3 vocab + PROJECT_CONTEXT session 13 entry + PROJECT_PLAN section 9 cumulative refresh) |
+| Active phase | **Phase 3 CLOSED 2026-05-29 (sessions 12-14).** Session 14 (this entry) two-track: (Track A) Phase 3 CLOSE — phase-boundary structural audit 6/6 PASS (file inventory, naming monotonicity, scaffolding cleanup, pairings, test-count parity, doc currency), LEARNINGS Phase 3 reflection consolidating 14 Risks (24-37) into 6 pattern families (Family A managed-runtime version-floor cross-check, Family B adapter-vs-tool config-key skew, Family C cloud-runtime stdout buffering, Family D IAM scope direct+transitive references, Family E wizard defaults vs Custom trust, Family F orchestration-state failure-shape intent), README Status line refreshed Phase 3 CLOSED. (Track B) Phase 4 kickoff forward-verify pass — restricted-domain doc-verify against facebook.github.io/prophet + statsmodels.org + learn.microsoft.com Power Query Amazon Athena. **Two new Risks (38-39) banked BEFORE Phase 4 work begins:** Risk 38 (Prophet rejected on annual-cadence + Stan C++ compile footprint; statsmodels chosen for pure-Python ARIMA / Holt-Winters fit), Risk 39 (Amazon Athena ODBC v2 driver + Windows System DSN setup is a Phase 5 pre-prerequisite — must land BEFORE session 1 PBI work, ~15-30 min Windows admin step). Phase 5 entry in PROJECT_PLAN updated with explicit pre-prerequisite call-out. Cumulative state preserved: 121/121 dbt schema + 114/114 SQL structural verify across 16 models + 12 verify files; orchestrated path on Step Functions reproduces full Phase 2 structural surface on every build. |
+| Next phase | **Phase 4 session 1.** First Gold mart: mart_pl_trend (Profit & Loss trend over the 10 fiscal year-ends). dbt model authored against the Business Vault Bridge / PIT, materialized as Iceberg in `financial_analytics_silver` (Phase 4 mart layer co-exists with BV layer in Silver until Gold-database split is necessary). Mart-shape PBI smoke test pattern from Project #2 carry-forward: build a minimal Power BI test against the mart shape at mart-creation time, not at Phase 5 build time. |
+| Last session closed | 2026-05-29 (Phase 3 session 14 — Phase 3 CLOSE + Phase 4 forward-verify SHIPPED) |
+| Last bundled commit | 2026-05-29 — Phase 3 session 14 bundle (LEARNINGS Phase 3 reflection + Risks 38-39 + PROJECT_PLAN section 9 Phase 4-5 entries + PROJECT_CONTEXT session 14 entry + README Status refresh) |
 | Active blockers | None |
-| Open questions | None at the architectural level. Phase 4 kickoff forward-verify pending. |
+| Open questions | None at the architectural level. Phase 4 forward-verify shipped; Phase 5 prerequisite explicit. Phase 6 CI/CD forward-verify deferred to Phase 5 close. |
 
 ---
 
@@ -88,6 +88,64 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-05-29 — Phase 3 session 14 — Phase 3 CLOSE (structural audit 6/6 PASS + 14 Risks rolled into 6 pattern families) + Phase 4 kickoff forward-verify pass + 2 new Risks (38 statsmodels-over-Prophet + 39 Athena ODBC v2 driver as Phase 5 pre-prerequisite) banked
+
+**Goal.** Two-track phase-boundary session, mirroring the session 11 (Phase 2 CLOSE + Phase 3 kickoff forward-verify) pattern. Track A = Phase 3 close: phase-boundary structural audit per ENGINEERING_STANDARDS, LEARNINGS Phase 3 reflection consolidating 14 banked Risks into top-level training-journey patterns, README Status line refresh. Track B = Phase 4 kickoff forward-verify: restricted-domain doc-verify against Python forecasting library options + Power BI Athena connector docs; bank Risk 38+ before any Phase 4 work begins.
+
+**Phase-boundary structural audit (6/6 PASS).** File inventory: 5 stepfunctions JSONs (1 ASL + 4 IAM) + 5 scripts (extract, smoke, run_dbt_in_glue, sync_phase3, verify_bronze) + 15 sql files (2 ddl + 1 diagnostic + 12 verify) + 16 dbt models + 4 schema yml files. Naming monotonicity: sql/ddl/ 01-02 monotonic; sql/verify/ 01-12 monotonic; sql/diagnostic/ 01. Scaffolding cleanup: only dbt/models/marts/.gitkeep retained (correctly — Phase 4 mart layer scaffold). Pairings: 9 warehouse + 1 yml, 2 intermediate + 1 yml, 3 BV + 1 yml, 2 staging + 1 sources yml, 10 verify files paired to live warehouse + BV models. Test-count parity: 121/121 dbt schema + 114/114 SQL structural carried forward from session 10; no model changes sessions 11-13; verification surface unchanged. Doc currency: DBT_PIPELINE updated s13, ORCHESTRATION_PIPELINE shipped s12, GLOSSARY updated s13, PROJECT_CONTEXT updated s13, PROJECT_PLAN updated s13; README refreshed s14 in this entry.
+
+**Phase 3 forward-verify pass (eighth time the rule applied — second time at a phase boundary other than Phase 2 kickoff itself).** Restricted-domain doc-fetch against facebook.github.io/prophet/docs/installation.html + statsmodels.org/stable/install.html + learn.microsoft.com/en-us/power-query/connectors/amazon-athena. Three key findings drove Phase 4 design decisions and surfaced two new Risks:
+
+1. **Prophet's value materializes at daily / sub-daily cadence with seasonality + holiday signals.** Project #3 forecast workload is annual (10 fiscal year-ends × 100 companies × 8 in-scope concepts) — no seasonality, no holidays, no daily trend changepoints. Prophet's Stan C++ compilation install footprint adds friction for zero workload-relevant benefit. **Decision: statsmodels chosen** (pure Python, classical ARIMA / Holt-Winters / SARIMA in statsmodels.tsa, fits the annual financial-time-series workload with prediction intervals out of the box). Risk 38 banked.
+2. **Amazon Athena Power Query connector is owned by Amazon (not Microsoft) and requires the Amazon Athena ODBC v2 driver pre-installed on the Windows machine, plus a Windows System DSN configured.** Authentication via DSN configuration OR Organizational account. Capabilities supported: Import + DirectQuery. **Implication: ODBC driver install + DSN setup is a 15-30 min Windows admin step that must precede ANY Phase 5 PBI work.** Phase 5 session 1 cannot start with "PBI Desktop → Get Data → Amazon Athena" — that path stalls at the first dialog asking for a DSN. Risk 39 banked. PROJECT_PLAN section 9 Phase 5 entry updated with the explicit pre-prerequisite call-out.
+3. **Athena Engine 3 reads Iceberg V2 natively.** No Iceberg-specific PBI connector config required. The Phase 2 Business Vault Iceberg materialization is consumed transparently through the Athena ODBC connector — no Risk to bank, but worth noting for Phase 5 confidence.
+
+A potential third Risk on the mart-shape PBI smoke test pattern was evaluated and NOT banked as new — the pattern is already a Project #2 carry-forward baked into PROJECT_PLAN section 9 Phase 4 entry as a Primary deliverable. Confirmation pass against the carry-forward list, not new Risk.
+
+**Phase 3 reflection — 14 Risks rolled into six pattern families.** Phase 3 banked 14 forward-projected Risks across three sessions (s11 forward-verify shipped 24-29; s12 first-run debug shipped 30-35; s13 first-Parallel-run shipped 36-37). Consolidated into:
+
+- **Family A** — Managed-runtime version-floor cross-check (Risks 26, 30)
+- **Family B** — Adapter vs tool version skew on config keys (Risk 31)
+- **Family C** — Cloud-runtime stdout buffering + Python idioms (Risk 32)
+- **Family D** — IAM scope discovery: direct + transitive references (Risks 34, 37)
+- **Family E** — Wizard defaults vs explicit trust policies (Risk 33)
+- **Family F** — Orchestration-state semantics: choose the failure shape deliberately (Risk 36)
+
+Risks 24, 25, 27, 28, 29, 35 are design-decision Risks already baked into the runtime + wrapper architecture; live as design provenance + live design in ORCHESTRATION_PIPELINE.md, no separate pattern family.
+
+**What landed.**
+
+- **LEARNINGS.md** — Phase 4 forward-projected Risks subsection (Risks 38-39) appended between Phase 3 Risk 37 and the Phase 3 reflection; Phase 3 reflection subsection (6 pattern families consolidating Risks 24-37) appended between Risk 39 and "Banked open items". Both follow established phase-reflection format.
+- **PROJECT_PLAN.md section 9** — Phase 4 row extended with statsmodels library lock + Risk 38 + Risk 39 cross-references + mart-shape PBI smoke test pattern Project #2 carry-forward call. Phase 5 row gets the explicit pre-prerequisite line: ODBC driver install + System DSN setup before any PBI build work begins.
+- **PROJECT_CONTEXT.md** — current status table updated to mark Phase 3 CLOSED + Phase 4 forward-verify SHIPPED; session 14 log entry (this entry) appended.
+- **README.md Status line refreshed** — replaced the session-12 wording with Phase 3 CLOSED + cumulative state + 14 Phase 3 Risks rolled into 6 pattern families.
+
+**Verification surface at session 14 close.**
+
+- Phase-boundary structural audit 6/6 checks PASS (file inventory, naming monotonicity, scaffolding, pairings, test-count parity, doc currency).
+- Phase 3 cumulative orchestration surface preserved: state machine financial-analytics-orchestrator green (last run 6m 15s at session 13 close), Phase 2 cumulative 121/121 dbt schema + 114/114 SQL structural verify still all-green (no model changes session 14; verification surface unchanged).
+- Forward-verify pass completed against 3 authoritative doc surfaces (Prophet installation, statsmodels installation, Power Query Amazon Athena connector).
+- 2 new Risks (38-39) banked BEFORE any Phase 4 work begins per the standing rule.
+
+**Decisions locked this session.**
+
+- **Forecasting library for Phase 4 = statsmodels.** statsmodels>=0.14 in requirements.txt; Prophet explicitly NOT installed. Carries to all Phase 4 forecasting work.
+- **Phase 5 pre-prerequisite = Amazon Athena ODBC v2 driver install + Windows System DSN setup.** Time-boxed ~15-30 min Windows admin step; lands before any PBI build session. Not a Phase 5 session itself; a Phase 4 → Phase 5 transition step.
+- **Phase reflection rolling 14 Risks into 6 families = standard Phase-close artefact** for Project #3. Generalises Phase 2's eight-family roll-up pattern (Phase 2 had 23 Risks rolled into 8 families; Phase 3 had 14 rolled into 6). Same shape, different scale.
+
+**Blockers / surprises.** No blockers. No surprises. Forward-verify pass surfaced two new Risks; both resolved cleanly at design time per the rule. statsmodels-over-Prophet decision aligned with Phase 0's expressed-as-deferred forecasting library question; the deferred decision now has explicit forward-verify provenance.
+
+**NOT in this session — deferred.**
+
+- **First Phase 4 mart (mart_pl_trend) + first mart-shape PBI smoke test** → Phase 4 session 1.
+- **scripts/forecast.py implementation** → Phase 4 session 4 (after the three non-forecast marts are shipped).
+- **ODBC driver install + DSN setup** → Phase 5 prerequisite slot (not a session).
+- **Phase 6 CI/CD forward-verify** → Phase 5 close.
+
+**Next session.** Phase 4 session 1 — first Gold mart (mart_pl_trend), authored as a dbt model against Business Vault Bridge / PIT, materialized as Iceberg in financial_analytics_silver. Mart-shape PBI smoke test against the mart at creation time per Project #2 carry-forward pattern. GOLD_MARTS_PIPELINE.md scaffolding. Est. 90-120 min.
+
+---
 
 ### 2026-05-29 — Phase 3 session 13 — verify-side fan-out from 1 Athena task to 10 via Parallel state SHIPPED + 2 new Risks (36 Parallel fail-fast + 37 Step Functions role Bronze view-resolution scope) banked + SIX-session ENGINEERING_STANDARDS audit streak unbroken
 
