@@ -864,6 +864,50 @@ A Cosmos `RenderConfig` parameter controlling how dbt tests are organised in the
 
 **Why it matters:** Choice has real consequences for fail-fast behaviour. `AFTER_ALL` runs all transformations even when an early test would have caught a problem; `AFTER_EACH` stops the chain at the first broken model.
 
+### **AWS Step Functions** `[Project 3]`
+
+AWS managed serverless orchestrator. A "state machine" is a JSON document describing a sequence of states (Task, Choice, Parallel, Map, Pass, Wait, Succeed, Fail) and transitions between them. Step Functions runs the state machine, manages retries, surfaces a visual execution graph + per-state event history, and integrates natively with ~200 AWS services.
+
+**In Project #3:** `financial-analytics-orchestrator` runs the dbt build on AWS Glue Python Shell, then fans out to 10 Athena verify queries in parallel. Replaces Airflow from Project #2 — Step Functions is the AWS-native orchestration choice locked at Phase 0.
+
+**Why it matters:** Step Functions has no servers to manage and no scheduler to host; the trade-off is that pipelines are authored in ASL JSON, not Python. For tool-on-cloud orchestration where the workload is small and the cadence is low, Step Functions wins on operational simplicity; for richer DAG-author ergonomics, dynamic task generation, or rich Python control flow, Airflow / Dagster / Prefect remain stronger choices.
+
+### **ASL** (Amazon States Language) `[Project 3]`
+
+The JSON-based DSL Step Functions state machines are written in. Top level: a `Comment`, a `StartAt` naming the first state, and a `States` map. Each state has a `Type` (Task | Choice | Parallel | Map | Pass | Wait | Succeed | Fail) plus type-specific fields (`Resource`, `Parameters`, `ResultPath`, `Next`, `End`, `Branches`, etc.). Workflow Studio in the Console renders ASL as a visual graph and round-trips edits both ways.
+
+**In Project #3:** `stepfunctions/state_machine.json` is the ASL artifact. Authored as JSON in the repo (source of truth), deployed by pasting into the Console's Code tab.
+
+### **JSONPath vs JSONata (Step Functions query language)** `[Project 3]`
+
+Step Functions states evaluate input/output transforms in one of two query languages. **JSONPath** is the legacy default — references like `$.glueRun` traverse the state input/output JSON. **JSONata** was introduced as the new default in Workflow Studio (2024+) and uses `{% jsonata-expression %}` syntax with richer transforms (filtering, mapping, arithmetic, string functions). The two are NOT interoperable per state; each state declares which language it uses.
+
+**In Project #3:** State machine is JSONPath end-to-end. JSONata's syntax requirements would have rejected `ResultPath: "$.glueRun"` and forced a rewrite of the state graph for no architectural benefit at this scale. Locked Phase 3 session 12.
+
+### **`.sync` integration pattern (Step Functions Task type)** `[Project 3]`
+
+A Step Functions Task can call AWS services in three modes: **Request-Response** (fire-and-forget), **`.sync`** (call API + poll until job reaches a terminal state, then return the result), and **`.waitForTaskToken`** (callback pattern for long-running external work). The `.sync` Resource ARN appends `.sync` to the integration name (`arn:aws:states:::glue:startJobRun.sync`, `arn:aws:states:::athena:startQueryExecution.sync`) and is the right shape for long-running but bounded work where Step Functions itself should manage the wait.
+
+**In Project #3:** Both Glue dbt build (`glue:startJobRun.sync`) and the 10 Athena verify queries (`athena:startQueryExecution.sync`) use `.sync`. Step Functions transparently polls each call until terminal state and surfaces the result.
+
+### **AWS Glue Python Shell** `[Project 3]`
+
+A "Job type" inside AWS Glue. Runs a Python script on managed infrastructure with `--additional-python-modules` to pip-install dependencies on cold start. 0.0625 or 1 DPU sizing. 480-min max timeout. Python 3.9 supported (3.6 sunset 2026-03-01). Pre-installed analytics library set (pyathena, pandas, boto3, etc.) optional.
+
+**In Project #3:** Hosts the dbt-on-cloud runtime. `scripts/run_dbt_in_glue.py` boots `dbtRunner` and calls `invoke(["build", "--target", "glue"])`. Wins over Lambda Container Image (15-min hard cap) and ECS Fargate (overkill IAM + VPC) on the daily-cadence orchestration trade-off.
+
+### **`dbtRunner` (dbt-core programmatic API)** `[Project 3]`
+
+`from dbt.cli.main import dbtRunner` — the canonical non-CLI entry point for invoking dbt programmatically (dbt-core 1.5+). `dbt = dbtRunner(); res = dbt.invoke(["build", "--target", "glue"])`. Returns a `dbtRunnerResult` with a `success` bool, a `result` payload, and any unhandled `exception`. No safe parallel execution within a single Python process — multiple concurrent invocations require subprocess wrapping.
+
+**In Project #3:** Used inside the Glue Python Shell wrapper. Success is detected via exit code only (Risk 25 — `result` internals are "liable to change" per dbt-labs).
+
+### **Customer Managed Policy (IAM)** `[Project 3]`
+
+One of three IAM policy classes: **AWS Managed** (maintained by AWS, e.g. `AWSGlueServiceRole`), **Customer Managed** (you author + own, reusable across multiple roles), **Inline** (embedded directly in a single role/user/group, not reusable, 2048-char cap on the body). Customer Managed is the standard for project-specific scoped policies — versioned, attachable to multiple roles, editable without touching the role itself.
+
+**In Project #3:** Both runtime roles use Customer Managed Policies (`lakehouse-glue-runtime-policy`, `lakehouse-stepfunctions-runtime-policy`) authored as JSON artifacts under `stepfunctions/iam_policies/`. Customer Managed was chosen over Inline because the policy bodies exceed the 2048-char inline cap (locked Phase 2 session 1 on the phil-dbt user policy).
+
 ---
 
 ## 7. Azure SQL & Cloud Concepts

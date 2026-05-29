@@ -141,6 +141,21 @@ dotenv -f ..\.env run -- dbt run      # builds models in Athena
 dotenv -f ..\.env run -- dbt test     # runs schema + data tests (no tests yet)
 ```
 
+### 6.1 Phase 3 — Glue-hosted invocation mode
+
+From Phase 3 session 12 onwards, the dbt project also runs unattended on AWS
+Glue Python Shell, orchestrated by an AWS Step Functions state machine. The
+local dotenv-wrapped commands above remain the canonical interactive entry
+point (development, ad-hoc testing); the orchestrated path is the production
+shape that runs on a schedule or on demand against the same dbt project.
+
+Full walkthrough — IAM roles, Glue job configuration, dbtRunner wrapper,
+Step Functions ASL, deploy helper, end-to-end execution model — lives in
+[`ORCHESTRATION_PIPELINE.md`](ORCHESTRATION_PIPELINE.md). Phase 3 session 13
+extended the state machine with a Parallel verify fan-out over all 10
+`sql/verify/03-12` queries; the orchestrated path therefore reproduces the
+full Phase 2 structural verification surface on every build.
+
 ## 7. Intermediate layer (Phase 2 session 2 onwards)
 
 The intermediate layer performs JSON extraction and concept-shaping over the
