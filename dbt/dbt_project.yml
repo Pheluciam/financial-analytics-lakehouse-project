@@ -79,8 +79,12 @@ clean-targets:
 #   hubs/links are schema-stable by construction; satellites evolve
 #   schema via full-refresh-when-needed, not via on_schema_change.
 #   ACTIVE: Phase 2 session 4 onwards (first hub: hub_company).
-# marts — iceberg table: Gold marts persisted for Power BI consumption.
-#   TO ADD: Phase 4 when first mart lands.
+# marts — iceberg table: Gold marts persisted for Power BI consumption
+#   via the Athena ODBC v2 driver + System DSN (Risk 39 prerequisite shipped
+#   2026-05-30 at Phase 4 session 1 kickoff). ACTIVE: Phase 4 session 1
+#   onwards. Inline doc-comment block above the marts: config below carries
+#   the design provenance (mirrors the business_vault layer documentation
+#   style added at Phase 2 session 10).
 #
 # Iceberg format version: Athena creates v2 tables by default — verified
 # 2026-05-28 against docs.aws.amazon.com/athena/latest/ug/querying-iceberg-creating-tables.html
@@ -117,6 +121,23 @@ models:
     #   session 10 onwards (first BV objects: dim_as_of_dates +
     #   pit_link_filing_concept_period + bridge_company_concept_period).
     business_vault:
+      +materialized: table
+      +table_type: iceberg
+      +format: parquet
+    # marts — iceberg table: Gold marts persisted for Power BI consumption.
+    #   Plain table materialization (not incremental + merge) — marts are
+    #   rebuilt every refresh from the Business Vault PIT + Bridge surface;
+    #   no SCD-2 to preserve and no insert-only contract to enforce. Each
+    #   dbt run is a full refresh. on_schema_change is inapplicable to the
+    #   non-merge path so the Iceberg merge + on_schema_change=sync_all_columns
+    #   duplicate-insertion bug (Risk 2, LEARNINGS 2026-05-28) is structurally
+    #   avoided here — same as the business_vault layer above. Iceberg V2 is
+    #   the format Athena Engine 3 creates by default; consumed transparently
+    #   by the Athena ODBC v2 driver into Power BI (Risk 39 verified at
+    #   Phase 3 session 14 forward-verify pass). ACTIVE: Phase 4 session 1
+    #   onwards (first mart: mart_pl_trend — 10-year P&L trend per S&P 100
+    #   company over the 10 fiscal year-end as-of-dates).
+    marts:
       +materialized: table
       +table_type: iceberg
       +format: parquet

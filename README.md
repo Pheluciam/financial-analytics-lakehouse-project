@@ -4,19 +4,29 @@
 > medallion (S3 + Glue + Athena) → 5-page Power BI executive overview.
 > Project #3 of Phil's data engineering portfolio.
 
-**Status:** Phase 3 CLOSED 2026-05-29 (sessions 12-14). End-to-end
-orchestrated dbt-on-Glue-Python-Shell via AWS Step Functions LIVE.
-State machine `financial-analytics-orchestrator`: Glue StartJobRun.sync
-(dbt host) → Athena StartQueryExecution.sync (sanity verify) → Parallel
-state fanning out across all 10 `sql/verify/03-12` queries. Latest
-orchestrated run Succeeded in 6m 15s; inside the Glue task dbt build
-PASS=157 / ERROR=0 / SKIP=0 / TOTAL=157, all 10 Parallel verify branches
-TaskSucceeded — full Phase 2 structural verification surface preserved in
-the orchestrated path. Phase 2 Silver Data Vault 2.0 (3 hubs + 2 links +
+**Status:** Phase 4 session 1 SHIPPED 2026-05-30. First Gold mart
+`mart_pl_trend` materialized as Iceberg/Parquet in `financial_analytics_silver`
+— 10-year annual P&L trend per S&P 100 company over 10 fiscal year-end
+as-of-dates, 19,393 rows after ASC 205 comparatives dedup, JOIN topology
+bridge → PIT → sat_concept_value → hub_company + sat_company_metadata.
+**20 dbt schema tests + 14 SQL structural verify checks + mart-shape PBI
+Desktop smoke test all PASS.** Risk 39 Phase 5 pre-prerequisite cleared:
+Amazon Athena ODBC v2.0.6.0 (x64) driver + Windows System DSN
+"FinancialAnalyticsAthena" + ~/.aws/credentials [phil-dbt] section
+populated from .env. Apple revenue line chart renders ~10-14 ascending
+fiscal_year points via PBI Desktop → Athena ODBC, validating the
+mart-shape architecture end-to-end. 6 new Risks banked (40-45) across
+the ODBC install path + comparatives dedup discovery + sat_concept_value
+MIN-collapse data-quality artifact. 10/10 ENGINEERING_STANDARDS audit
+PASS on mart_pl_trend.sql — SEVEN-session unbroken streak. Phase 3 fully
+preserved underneath: end-to-end orchestrated dbt-on-Glue-Python-Shell
+via AWS Step Functions LIVE, last orchestrated run Succeeded in 6m 15s,
+dbt build PASS=157 / ERROR=0 / SKIP=0 / TOTAL=157, all 10 Parallel verify
+branches TaskSucceeded. Phase 2 Silver Data Vault 2.0 (3 hubs + 2 links +
 4 sats incl. 1 multi-active + 1 dim + 1 PIT + 1 Bridge, 121/121 dbt schema
-+ 114/114 SQL structural verify) preserved underneath. 14 Phase 3 Risks
-banked (24-37) rolled into six pattern families at Phase 3 close. Phase 4
-(Gold marts + Python forecasting) up next.
++ 114/114 SQL structural verify) preserved. Phase 4 sessions 2-5 next:
+mart_peer_benchmark + mart_financial_health + mart_growth_forecast +
+Phase 4 CLOSE.
 
 ---
 

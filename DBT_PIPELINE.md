@@ -1557,7 +1557,83 @@ Vault's immutable history underneath. The trade-off is honest:
 634K-row BV artefacts cost storage to save query compute — a worthwhile
 trade at the analytical layer, irrelevant at the audit layer.
 
-## 9. Verification surface (per session)
+## 9. Marts layer (Phase 4 session 1 onwards)
+
+The Phase 4 Gold marts layer materializes pre-computed analytical
+surfaces from the Silver Business Vault for Power BI Desktop
+consumption. Full walkthrough at
+[GOLD_MARTS_PIPELINE.md](GOLD_MARTS_PIPELINE.md); this section is a
+DBT_PIPELINE-anchored pointer + one-paragraph summary of what landed at
+each session.
+
+### 9.1 Layer config
+
+The marts/ layer config in [dbt/dbt_project.yml](dbt/dbt_project.yml)
+mirrors business_vault's: plain Iceberg table, Parquet format, no
+incremental merge. Each mart is rebuilt every dbt run from the BV layer;
+no SCD-2 to preserve, no insert-only contract to enforce, Risk 2
+Iceberg-merge bug class structurally avoided.
+
+### 9.2 Phase 4 session 1 — mart_pl_trend
+
+Shipped 2026-05-30. First Gold mart: 10-year annual P&L trend per S&P
+100 company over the 10 fiscal year-end as-of-dates in dim_as_of_dates.
+Composite natural PK (cik, as_of_date, fiscal_year, canonical_concept);
+surrogate single-column PK mart_pl_trend_hk via SHA-256. JOIN topology
+= bridge_company_concept_period → pit_link_filing_concept_period →
+sat_concept_value → hub_company + sat_company_metadata (5-step
+equi-join chain over the BV + RV layer; the pattern test the BV layer
+was built for). Filter surface = canonical_concept IN ('revenue',
+'net_income') AND fiscal_period = 'FY'. Row count = 19,393 at session 1
+first build.
+
+Three Risks banked at session 1 build:
+
+- **Risk 42** — SEC ASC 205 income-statement comparatives produce
+  ~2x duplication at the link grain when joined naively through Bridge
+  → PIT → sat (19,371 dup rows on 19,393 unique grain tuples at first
+  build). Mart layer is where this collapse belongs — ROW_NUMBER()
+  OVER (PARTITION BY mart grain ORDER BY accession_number DESC) keeps
+  the latest filing's value per grain tuple. accession_number brought
+  through the CTE chain for dedup but NOT projected to the mart output.
+- **Risk 43** — PBI ODBC chains AWS credentials through named profiles
+  in `~/.aws/credentials`, NOT .env env vars. `.env`-only setups (the
+  project's dbt pattern) need a one-time credentials-file population
+  before PBI works. Bootstrap script populates `[phil-dbt]` section
+  from .env at Phase 4 session 1 kickoff.
+- **Risk 45** — sat_concept_value's MIN(value) tie-breaker (Risk 16,
+  locked at Phase 2 session 8) produces analyst-visible artifacts in
+  mart_pl_trend: some fiscal_years render at the smaller-Revenue-alias
+  value, biasing low for years where Apple reported both 'Revenues'
+  and 'RevenueFromContractWithCustomerExcludingAssessedTax'. NOT a
+  mart bug — collapse decision is upstream at sat_concept_value. Phase
+  4 follow-up at session 2 design pass.
+
+Two ODBC-driver-specific Risks (40, 41) also banked from the install
+path — see LEARNINGS.md Phase 4 forward-verify subsection.
+
+### 9.3 Verify surface
+
+Schema tests: 20 tests in [dbt/models/marts/_models.yml](dbt/models/marts/_models.yml)
+(1 unique_combination_of_columns + 10 not_null + 1 unique +
+4 accepted_values + 4 relationships). All 20 PASS at Phase 4 session 1
+second dbt build — first build caught Risk 42 dedup at the schema-test
+layer pre-Athena, validating the dbt schema test pack as an effective
+pre-flight surface.
+
+Structural verify: 14 PASS/FAIL CTE checks in
+[sql/verify/13_phase4_marts_pl_trend_verification.sql](sql/verify/13_phase4_marts_pl_trend_verification.sql)
+matching the 01-12 verify suite pattern. All 14 PASS in Athena at
+Phase 4 session 1 close (signed in as phil-admin, workgroup
+wg_financial_analytics, region us-east-1).
+
+Mart-shape PBI smoke test (Project #2 carry-forward): PASSED
+architecturally at session 1; Apple revenue line chart renders
+~10-14 ascending points fiscal_year 2010-2024. Risk 45 data-quality
+artifact surfaced but does NOT fail the architectural smoke test —
+upstream sat_concept_value collapse decision, not a mart bug.
+
+## 10. Verification surface (per session)
 
 Each dbt session ships with a verification suite parallel to Phase 1's
 SQL + boto3 pattern. Session 1 surface:
@@ -1567,7 +1643,7 @@ SQL + boto3 pattern. Session 1 surface:
 - Glue Catalog shows each new model as a registered table or view.
 - Athena smoke query returns expected rows for at least one CIK.
 
-## 10. References
+## 11. References
 
 - dbt-athena adapter docs: https://docs.getdbt.com/docs/local/connect-data-platform/athena-setup
 - dbt-athena configuration reference: https://docs.getdbt.com/reference/resource-configs/athena-configs

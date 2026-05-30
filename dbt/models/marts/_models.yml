@@ -1,0 +1,188 @@
+# Gold marts layer (Phase 4) model contracts.
+#
+# Documents the upstream/downstream contract per ENGINEERING_STANDARDS
+# criterion 7. Schema tests run via `dbt test`; the structural verify
+# suite at sql/verify/13_phase4_marts_pl_trend_verification.sql
+# complements schema tests with cardinality + parity checks the YAML
+# can't express.
+#
+# Marts are Gold-layer consumption surfaces for Power BI Desktop, accessed
+# via the Amazon Athena ODBC v2 driver + Windows System DSN
+# "FinancialAnalyticsAthena" (Risk 39 prerequisite shipped 2026-05-30 at
+# Phase 4 session 1 kickoff). Each mart joins through the Business Vault
+# Bridge + PIT to materialize a pre-computed analytical surface — the
+# pattern validated at mart_pl_trend (this session) carries forward to
+# mart_peer_benchmark, mart_financial_health, mart_growth_forecast across
+# the rest of Phase 4. Materialized as plain Iceberg tables (not
+# incremental merge) per dbt_project.yml marts block — structurally
+# avoids the LEARNINGS Risk 2 Iceberg-merge on_schema_change
+# duplicate-insertion bug class.
+
+version: 2
+
+models:
+  - name: mart_pl_trend
+    description: |
+      Gold-layer Profit & Loss trend mart. 10-year annual P&L trend per
+      S&P 100 company over the 10 fiscal year-end as-of-dates configured
+      in dim_as_of_dates. Filter surface = (canonical_concept IN
+      ('revenue', 'net_income') AND fiscal_period = 'FY'). Filter to
+      revenue + net_income is the current canonical_concepts_dictionary
+      seed's income_statement coverage — seed expansion to broader P&L
+      lines (OperatingIncomeLoss, GrossProfit, etc.) is deferred to a
+      Phase 4 follow-up session. Filter to fiscal_period = 'FY' is the
+      analyst-conventional annual P&L view; a separate mart_pl_quarterly
+      is a logical future extension. Composite natural PK
+      (cik, as_of_date, fiscal_year, canonical_concept) enforced at test
+      time via dbt_utils.unique_combination_of_columns below. as_of_date
+      is RETAINED in the grain to demonstrate the BV PIT/Bridge benefit
+      end-to-end — collapsing to a latest-snapshot-only grain would make
+      the PIT/Bridge layer theatrical for the first mart. Single-column
+      surrogate PK = mart_pl_trend_hk via SHA-256 over the composite
+      (matches the project's hash-chain convention per LEARNINGS Risk 4
+      + Risk 6). JOIN topology: bridge_company_concept_period (base) →
+      pit_link_filing_concept_period → sat_concept_value → hub_company +
+      sat_company_metadata — 5-step equi-join chain over the BV + RV
+      layer. Entity descriptor = entity_name from sat_company_metadata
+      (SEC EDGAR companyfacts doesn't expose stock ticker; entity_name
+      is the project's native company descriptor). Materialized as
+      Iceberg table per marts layer defaults — full rebuild per dbt run,
+      Risk 2 Iceberg-merge bug class structurally avoided. Walkthrough:
+      GOLD_MARTS_PIPELINE.md at repo root + DBT_PIPELINE.md section 9.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cik
+            - as_of_date
+            - fiscal_year
+            - canonical_concept
+    columns:
+      - name: mart_pl_trend_hk
+        description: |
+          SHA-256 hash of (cik || '||' || as_of_date || '||' ||
+          fiscal_year || '||' || canonical_concept), hex-encoded.
+          Single-column surrogate primary key — matches the hub/link/sat
+          + PIT/Bridge single-hash-PK surface so every Silver-layer model
+          looks the same. Composite natural PK enforced at test time via
+          dbt_utils.unique_combination_of_columns above.
+        tests:
+          - not_null
+          - unique
+
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. Foreign key into
+          hub_company. The S&P 100 universe-scoped business key for each
+          row's company dimension. FK relationships test below guards
+          lineage closure to the Raw Vault hub.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('hub_company')
+              field: cik
+
+      - name: entity_name
+        description: |
+          Company entity name as reported in the SEC EDGAR companyfacts
+          cover page (e.g., "Apple Inc."). Sourced via INNER JOIN to
+          sat_company_metadata on hub_company_hk. Denormalized
+          descriptor — present on the mart for Power BI visualization
+          without requiring a downstream JOIN to the satellite. No FK
+          relationships test (sat_company_metadata is the authoritative
+          source and the INNER JOIN already guarantees lineage closure).
+        tests:
+          - not_null
+
+      - name: as_of_date
+        description: |
+          Fiscal year-end snapshot date this mart row applies to (DATE
+          type). FK into dim_as_of_dates. 10 distinct values per refresh
+          (2016-12-31 through 2025-12-31). Combined with cik, fiscal_year,
+          and canonical_concept forms the composite natural PK.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_as_of_dates')
+              field: as_of_date
+
+      - name: fiscal_year
+        description: |
+          Fiscal year as reported by the company (INTEGER). All rows
+          satisfy fiscal_period = 'FY' by the upstream filter, so
+          fiscal_year is reliably populated here despite being nullable
+          in the upstream link / bridge per LEARNINGS Risk 12 defensive
+          tolerance — the FY filter naturally drops the rare null-FY
+          quarterly rows.
+        tests:
+          - not_null
+
+      - name: canonical_concept
+        description: |
+          Canonical P&L concept name (varchar). Either 'revenue' or
+          'net_income' under the current canonical_concepts_dictionary
+          seed's income_statement coverage. FK into hub_concept via the
+          hub's canonical_concept business key. Future seed expansion
+          to broader P&L lines (OperatingIncomeLoss, GrossProfit, etc.)
+          would extend the accepted_values set.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['revenue', 'net_income']
+          - relationships:
+              to: ref('hub_concept')
+              field: canonical_concept
+
+      - name: value_numeric
+        description: |
+          Reported financial value in USD (DECIMAL(28,2)). Resolved from
+          sat_concept_value's value column at the PIT-resolved sat
+          coordinate for the (link, as_of_date) pair. Already
+          MIN-collapsed at sat_concept_value level per LEARNINGS Risk 16
+          (multi-tag-same-period value disagreement is collapsed by MIN
+          for conservative-revenue-measurement convention). The
+          authoritative analyst-facing fact column. Never NULL — INNER
+          JOIN to sat_concept_value upstream where value IS NOT NULL is
+          already enforced in canonical_observations.
+        tests:
+          - not_null
+
+      - name: unit
+        description: |
+          Reporting currency code (varchar). Constant 'USD' within the
+          current scope — staging filters companyfacts to USD-only.
+          Carried on the mart for explicit currency context in Power BI
+          visualizations and forward-compatibility with multi-currency
+          expansion (deferred indefinitely; out of project scope).
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['USD']
+
+      - name: period_end_date
+        description: |
+          Calendar date the reported value applies to (DATE). The
+          fiscal-year-end for the row's FY filing — typically matches
+          the company's fiscal year-end month (Apple ~September,
+          Microsoft ~June, most others December). Carried on the mart
+          from the bridge for Power BI time-axis grouping.
+        tests:
+          - not_null
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) recording when this mart row was materialized
+          by the most recent dbt run. Same value for every row per
+          refresh (mart is fully rebuilt each run). Mart's own lineage
+          timestamp — distinct from the upstream sat_concept_value
+          load_datetime that the PIT resolved against.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          String identifier of the source system / process this mart row
+          was generated by. Constant 'mart.mart_pl_trend'.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['mart.mart_pl_trend']
