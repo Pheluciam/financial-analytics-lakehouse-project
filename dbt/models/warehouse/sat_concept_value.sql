@@ -30,18 +30,32 @@
 -- — by construction the sat's FK matches the link's PK because both
 -- compute the same hash over the same 7-column composite.
 --
--- Value disagreement collapse (Risk 16 sub-decision). When canonical-
--- collapse produces multiple rows for the same (cik, accession,
--- canonical, period) tuple with different actual reported values (the
--- 5,941-row gap in probe 2 — typically two revenue alias tags reporting
--- slightly different numbers due to ASC 606 timing), MIN(value) is the
--- tie-breaker. MIN biases toward the more conservative revenue
--- measurement (e.g., excluding-assessed-tax over including-assessed-tax)
--- — aligns with analyst convention of "smallest defensible number" for
--- revenue measurement. Documented here in the model body, NOT swept
--- under DISTINCT — DISTINCT would non-deterministically pick one row.
--- MIN(value) is deterministic and audit-traceable. Same MIN applied to
--- unit (trivially collapses to 'USD' since staging filters to USD-only).
+-- Value disagreement collapse (Risk 16 sub-decision, RESOLVED Risk 45
+-- + Risk 47 at Phase 4 session 2, 2026-05-30). When canonical-collapse
+-- produces multiple rows for the same (cik, accession, canonical,
+-- period) tuple with different actual reported values (the 5,941-row
+-- gap in probe 2 — typically two revenue alias tags reporting different
+-- numbers due to ASC 606 timing), pick MAX(value) — the analyst-correct
+-- headline number — with the canonical_concept_tag_preference seed as
+-- a deterministic tie-breaker between rows of equal value. ROW_NUMBER()
+-- OVER (PARTITION BY natural cardinal tuple ORDER BY value DESC,
+-- preference_rank ASC) keeps rn = 1. value DESC primary aligns with
+-- analyst convention "company's publicly-announced top-line revenue is
+-- the LARGEST reported figure across XBRL tag aliases for the same
+-- period" — companies during ASC 606 transition often report a legacy
+-- tag like Revenues alongside the new RevenueFromContractWithCustomer*
+-- tag, and the legacy tag may carry a fractional value (Apple FY2019
+-- Revenues = $64B vs RevenueFromContractWithCustomerExcludingAssessedTax
+-- = $260B). preference_rank ASC secondary is used only for the
+-- degenerate case where multiple tags happen to report the SAME value
+-- — preserves auditability + determinism without driving the
+-- analyst-facing selection. v1 of this fix (Risk 45, shipped earlier
+-- this session) used preference_rank ASC PRIMARY; v1 surfaced the
+-- ASC-606-transition antipattern in the PBI smoke test (Apple FY2019
+-- rendered at $64B, WORSE than the original MIN=$70B) — banked as
+-- Risk 47 + flipped to the present (v2) shape. Unit collapse via
+-- MIN(unit) preserved — trivially returns 'USD' since staging filters
+-- to USD-only.
 --
 -- hashdiff function chain (Risk 8). SHA-256 over COALESCE-sentinel-
 -- protected concat of the 2 payload columns. value is reliably populated
@@ -104,6 +118,17 @@ canonical_dict AS (
     FROM {{ ref('canonical_concepts_dictionary') }}
 ),
 
+-- Risk 45 resolution (Phase 4 session 2, 2026-05-30). Per-canonical
+-- ordered tag preference list. INNER JOIN below in preference_ranked
+-- enforces that every mapped tag in canonical_concepts_dictionary has
+-- a preference_rank — a missing rank drops the row and surfaces as a
+-- config gap downstream. Seed columns: canonical_concept, concept_name,
+-- preference_rank (smallint, 1 = most-preferred).
+tag_preference AS (
+    SELECT canonical_concept, concept_name, preference_rank
+    FROM {{ ref('canonical_concept_tag_preference') }}
+),
+
 -- Per-concept UNNEST — same shape as link_filing_concept_period but
 -- additionally projects value + unit alongside the link-grain columns.
 -- DECIMAL(28,2) for value handles ~$10^26 (comfortably above Apple's
@@ -136,10 +161,15 @@ all_observations AS (
     {% endfor %}
 ),
 
+-- Canonical-mapped observations. concept_name retained (in contrast to
+-- the pre-Risk-45 shape) so the downstream preferred-tag join can run
+-- on the original source tag. concept_name is NOT projected to the
+-- final mart-facing surface — dropped at collapsed_observations.
 canonical_observations AS (
     SELECT
         o.cik,
         o.accession_number,
+        o.concept_name,
         d.canonical_concept,
         o.period_start_date,
         o.period_end_date,
@@ -154,11 +184,34 @@ canonical_observations AS (
       AND o.value IS NOT NULL
 ),
 
--- Value disagreement collapse (Risk 16 sub-decision). GROUP BY the
--- natural cardinal tuple; MIN(value) deterministic tie-breaker for the
--- ~5,941 canonical-collapse duplicates from multi-tag-same-period
--- dual-reporting. MIN biases conservative — aligns with analyst
--- convention. unit is constant 'USD' so MIN trivially returns 'USD'.
+-- Attach preference_rank from the seed. INNER JOIN intentional — a
+-- canonical-mapped tag with no preference_rank entry should fail loudly
+-- as a missing-config signal rather than silently fall through.
+preference_ranked AS (
+    SELECT
+        co.cik,
+        co.accession_number,
+        co.canonical_concept,
+        co.period_start_date,
+        co.period_end_date,
+        co.fiscal_year,
+        co.fiscal_period,
+        co.value,
+        co.unit,
+        tp.preference_rank
+    FROM canonical_observations co
+    INNER JOIN tag_preference tp
+        ON tp.canonical_concept = co.canonical_concept
+        AND tp.concept_name = co.concept_name
+),
+
+-- Value disagreement collapse (Risk 45 + Risk 47 resolution). ROW_NUMBER
+-- over the natural cardinal tuple, ORDER BY value DESC (analyst-correct
+-- headline number wins) then preference_rank ASC (deterministic tie-
+-- breaker between equal values). Keep rn = 1 — picks the largest
+-- reported value per (cik, accession, canonical, period) tuple, with
+-- the seed used only to disambiguate equal-value ties. See Risk 47 in
+-- LEARNINGS for the v1→v2 flip rationale.
 collapsed_observations AS (
     SELECT
         cik,
@@ -168,17 +221,25 @@ collapsed_observations AS (
         period_end_date,
         fiscal_year,
         fiscal_period,
-        MIN(value) AS value,
-        MIN(unit) AS unit
-    FROM canonical_observations
-    GROUP BY
-        cik,
-        accession_number,
-        canonical_concept,
-        period_start_date,
-        period_end_date,
-        fiscal_year,
-        fiscal_period
+        value,
+        unit
+    FROM (
+        SELECT
+            pr.*,
+            ROW_NUMBER() OVER (
+                PARTITION BY
+                    pr.cik,
+                    pr.accession_number,
+                    pr.canonical_concept,
+                    pr.period_start_date,
+                    pr.period_end_date,
+                    pr.fiscal_year,
+                    pr.fiscal_period
+                ORDER BY pr.value DESC, pr.preference_rank ASC
+            ) AS rn
+        FROM preference_ranked pr
+    ) ranked
+    WHERE rn = 1
 ),
 
 -- Compute parent link FK (link_filing_concept_period_hk) — same 7-column

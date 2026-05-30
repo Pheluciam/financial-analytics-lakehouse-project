@@ -223,20 +223,19 @@ visible fiscal_years for each company range FY2010-FY2024 (~14 years
 of XBRL-era reporting). At earlier as_of_dates the visible window
 shrinks per the filed_date <= as_of_date filter.
 
-**Risk 45 candidate (banked at smoke test).** sat_concept_value's
-MIN(value) tie-breaker (Risk 16, locked at Phase 2 session 8) produces
-analyst-visible artifacts in mart_pl_trend — Apple FY2019 renders as
-~$70B (actual: ~$260B) because the MIN-collapse selects the SMALLER of
-multiple Revenue alias tags reported for that period. The smaller
-alias often excludes assessed tax / partial services, producing
-artifactually-low values for some fiscal years. NOT a mart bug — the
-collapse decision is upstream at sat_concept_value. Phase 4 follow-up
-options: (a) switch MIN(value) → MAX(value) at sat_concept_value (less
-conservative, full-revenue bias); (b) add per-canonical preferred-tag
-mapping (e.g., for 'revenue', prefer
-'RevenueFromContractWithCustomerExcludingAssessedTax' over 'Revenues'
-when both exist); (c) accept the bias and document for analyst
-consumers. Decision deferred to Phase 4 session 2 design pass.
+**Risk 45 + Risk 47 + Risk 48 — RESOLVED at Phase 4 session 2
+(2026-05-30).** Three-Risk design pass surfaced at session 2 kickoff +
+landed via cascade rebuild of sat_concept_value + mart_pl_trend +
+mart_peer_benchmark. See section 8 ("Phase 4 session 2 deliverables")
+for the full narrative — sat_concept_value collapse logic flipped from
+MIN(value) to MAX(value) + preferred-tag seed tie-breaker, and the
+marts gained an intra-accession period-chunk filter (period span
+350-380 days + year(period_end_date) ∈ {fiscal_year, fiscal_year+1})
+to drop the SEC XBRL anomaly where a single 10-K accession tags
+multiple quarter / comparative periods with fp=FY fy=filing_year.
+Post-cascade verification at session 2 close confirms Apple FY2019
+revenue = $260.174B (analyst-correct, vs the session 1 MIN-collapse
+artifact of ~$70B).
 
 ---
 
@@ -345,13 +344,171 @@ preserved — no model changes session 15.
 
 ---
 
-## 8. Phase 4 roadmap
+## 8. Phase 4 session 2 deliverables
+
+What landed at Phase 4 session 2 (2026-05-30):
+
+- **dbt/seeds/canonical_concept_tag_preference.csv** — new seed driving
+  the Risk 45 v2 sat_concept_value collapse tie-breaker (analyst-credible
+  per-canonical ordered tag preference list). 8 rows covering all
+  currently mapped concept_names: revenue with 4 alias entries
+  (Revenues=1, RevenueFromContractWithCustomerExcludingAssessedTax=2,
+  RevenueFromContractWithCustomerIncludingAssessedTax=3,
+  SalesRevenueNet=4), net_income / assets / liabilities /
+  stockholders_equity each with their single source tag at rank 1.
+- **dbt/models/warehouse/sat_concept_value.sql** — Risk 45 v2 +
+  Risk 47 refactor. canonical_observations CTE retains concept_name;
+  new preference_ranked CTE INNER JOINs to the seed; collapsed_observations
+  CTE replaces MIN(value) GROUP BY with ROW_NUMBER() OVER (PARTITION BY
+  natural cardinal tuple ORDER BY value DESC, preference_rank ASC)
+  keeping rn=1. Full-refresh rebuild propagates through PIT + Bridge +
+  marts cascade.
+- **dbt/models/marts/mart_peer_benchmark.sql** — second Gold mart,
+  walkthrough in subsection 8.1 below.
+- **dbt/models/marts/mart_pl_trend.sql** — Risk 48 dedup filter added
+  to sat_resolved CTE (period span 350-380 days + year(period_end_date)
+  ∈ {fiscal_year, fiscal_year+1}). Mart rebuild re-applies semantics
+  post-cascade.
+- **dbt/models/marts/_models.yml** — extended with mart_peer_benchmark
+  entry (1 unique_combination + 19 column-level: not_null + unique +
+  accepted_values + relationships). 26 schema tests on the new mart.
+- **sql/verify/14_phase4_marts_peer_benchmark_verification.sql** — 17
+  PASS/FAIL CTE structural checks (extending the 01-13 verify suite).
+- **Mart-shape PBI smoke test on mart_peer_benchmark** — Project #2
+  carry-forward pattern repeated. Apple FY2019 revenue = $260.174B
+  (vs session 1 ~$70B MIN-collapse artifact) confirms the cascade
+  landed at the analyst-facing surface. Archive saved as
+  `powerbi/02_smoke_test_phase_4_session_2.pbix`.
+
+Three Risks banked or revised this session: Risk 45 v1 (preferred-tag
+seed, ORDER BY preference_rank ASC primary) → ASC-606-transition
+anti-pattern surfaced → Risk 47 v1→v2 flip (ORDER BY value DESC
+primary, preference_rank ASC tie-breaker only); Risk 48 mart-dedup
+intra-accession period-chunk filter to address the deeper SEC XBRL
+artifact where one 10-K accession tags multiple unrelated periods
+with fp=FY fy=filing_year. See LEARNINGS.md Risks 46-48 for the full
+diagnosis loops.
+
+### 8.1 mart_peer_benchmark walkthrough
+
+The second Gold mart: cross-company peer benchmarking at FY snapshots
+over the S&P 100 universe. For each (cik, as_of_date, fiscal_year,
+canonical_concept) row, projects the company's value alongside
+peer-group aggregates (peer_count, peer_mean, peer_median, peer_stddev,
+peer_min, peer_max) and the company's per-peer-group rank + percentile
+(peer_rank, peer_percentile).
+
+**Grain.** Composite (cik, as_of_date, fiscal_year, canonical_concept)
+— identical to mart_pl_trend by design. Both marts are downstream
+consumption surfaces of the same Bridge spine and PIT lookups.
+
+**Surrogate PK.** mart_peer_benchmark_hk = SHA-256 hex over the
+4-column composite grain, matching mart_pl_trend's hash convention.
+
+**Filter surface.**
+
+- `canonical_concept IN ('revenue', 'net_income', 'assets')` — three
+  concepts spanning income statement (revenue + net_income) AND
+  balance sheet (assets), giving PBI consumers a peer-benchmarking
+  surface across both primary statement types. liabilities +
+  stockholders_equity excluded — less useful for outright peer
+  benchmarking at FY snapshot (more meaningful as ratios in
+  mart_financial_health at session 3).
+- `fiscal_period = 'FY'` — annual filings only.
+
+**Peer group definition.** Single S&P 100 universe peer group — every
+company in the same (as_of_date, fiscal_year, canonical_concept)
+partition is treated as a peer of every other. Sector-segment peer
+groups (Tech vs Consumer vs Financials, etc.) require an additional
+cik → sector seed; deferred to Phase 4 session 3 alongside
+mart_financial_health. The partition-keyed window functions naturally
+extend to a richer (sector × as_of_date × fiscal_year × canonical)
+partition spec when the seed lands.
+
+**JOIN topology.** Identical 5-step equi-join chain over BV + RV as
+mart_pl_trend. Differentiator is the trailing peer-aggregation CTEs.
+
+**Peer aggregation shape.** Two trailing CTEs after the per-row
+deduped surface:
+
+- `peer_stats` — GROUP BY (as_of_date, fiscal_year, canonical_concept).
+  Computes peer_count, peer_mean (AVG), peer_median (approx_percentile
+  at 0.5 — Athena Engine 3 deterministic bounded-error algorithm, error
+  tolerance trivial at S&P 100 scale), peer_stddev (population),
+  peer_min, peer_max.
+- `peer_ranked` — per-row window functions over the same partition.
+  peer_rank via `RANK() OVER (... ORDER BY value_numeric DESC)` —
+  1 = highest in peer group, ties share rank, next jumps.
+  peer_percentile via `CUME_DIST() OVER (... ORDER BY value_numeric
+  ASC)` — 1.0 = highest, fraction = proportion of peers at-or-below
+  (standard analyst percentile interpretation).
+
+Two separate CTEs by design — GROUP BY aggregates collapse cardinality
+and JOIN back; window functions preserve cardinality and project
+per-row. Keeping them isolated produces a more readable join shape
+than mixing window aggregates with per-row window ranks in one pass.
+
+**Risk 48 dedup filter (shared with mart_pl_trend).** Conditional
+applied at sat_resolved CTE: year(period_end_date) must match
+fiscal_year ± 1, AND for income-statement canonicals only (revenue +
+net_income), period span must be 350-380 days. Balance sheet
+canonical (assets) is exempt from the span filter — point-in-time
+balance sheet observations have period_start_date NULL or equal to
+period_end_date so date_diff would be 0 (outside the 350-380 band).
+The year filter alone correctly drops prior-year comparatives for
+balance sheet items.
+
+**Output shape — 19 columns:** mart_peer_benchmark_hk, cik,
+entity_name, as_of_date, fiscal_year, canonical_concept, value_numeric,
+unit, peer_count, peer_mean, peer_median, peer_stddev, peer_min,
+peer_max, peer_rank, peer_percentile, period_end_date, load_datetime,
+record_source.
+
+**Row count.** 29,936 rows at session 2 close (10,600 assets +
+9,775 revenue + 9,561 net_income). Pre-Risk-48 (pre-filter) build was
+29,994 rows; the 58-row delta is the dropped intra-accession
+period-chunks + non-matching-year comparatives.
+
+### 8.2 Verification surface at session 2 close
+
+- **20 dbt schema tests on mart_pl_trend (PASS post-cascade rebuild)** —
+  unchanged from session 1; Risk 48 filter is row-level not schema-level.
+- **26 dbt schema tests on mart_peer_benchmark (PASS at first build)** —
+  1 unique_combination + 11 not_null + 1 unique + 5 accepted_values +
+  8 relationships.
+- **14 SQL structural verify checks on mart_pl_trend
+  (PASS in Athena post-cascade)** — row count band 19,336 (within
+  [1,000, 20,000] tolerance).
+- **17 SQL structural verify checks on mart_peer_benchmark
+  (PASS in Athena)** — row count band 29,936 (within [3,000, 60,000]
+  tolerance); peer_rank ∈ [1, peer_count] across all rows;
+  peer_percentile ∈ (0, 1]; peer_count consistent per partition (405
+  partitions at first build → 270 partitions at second build post-Risk-48
+  filter).
+- **2 mart-shape PBI smoke tests** — session 1
+  (`01_smoke_test_phase_4_session_1.pbix`) re-confirmed analyst-correct
+  post-cascade; session 2
+  (`02_smoke_test_phase_4_session_2.pbix`) confirms mart_peer_benchmark
+  end-to-end consumption + Apple FY2019 revenue = $260.174B
+  analyst-correct.
+
+Cumulative verification surface at session 2 close: **46 dbt schema
+tests on the marts surface + 31 SQL structural verify checks** across
+the two active Gold marts. Phase 2 cumulative 121/121 dbt schema +
+114/114 SQL structural verify on the warehouse + business_vault surface
+preserved (sat_concept_value Risk 45 v2 refactor rebuilt without
+cardinality change at the sat layer — all 45 sat+BV schema tests PASS
+post-cascade).
+
+---
+
+## 9. Phase 4 roadmap
 
 | Session | Deliverable | Status |
 |---|---|---|
 | 4.1 | mart_pl_trend + ODBC/DSN prerequisite + smoke test pattern + this doc | SHIPPED 2026-05-30 |
-| 4.2 | mart_peer_benchmark + Risk 45 sat_concept_value collapse decision pass | pending |
-| 4.3 | mart_financial_health + canonical seed expansion (broader P&L coverage) | pending |
+| 4.2 | mart_peer_benchmark + Risk 45 v2 / Risk 47 / Risk 48 cascade | SHIPPED 2026-05-30 |
+| 4.3 | mart_financial_health + canonical seed expansion (broader P&L coverage) + sector seed for richer peer groups | pending |
 | 4.4 | mart_growth_forecast + scripts/forecast.py (statsmodels ARIMA / Holt-Winters) | pending |
 | 4.5 | Phase 4 CLOSE — structural audit + reflection rolling Phase 4 Risks into pattern families | pending |
 
@@ -361,7 +518,7 @@ documented in LEARNINGS.md Phase 4 forward-verify subsection.
 
 ---
 
-## 9. References
+## 10. References
 
 - Project conventions: [TEACHING_PREFERENCES.md](TEACHING_PREFERENCES.md),
   [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md),

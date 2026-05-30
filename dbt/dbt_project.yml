@@ -158,3 +158,21 @@ seeds:
         concept_name: varchar(128)
         canonical_concept: varchar(64)
         business_area: varchar(32)
+    # canonical_concept_tag_preference — Risk 45 resolution seed
+    # (Phase 4 session 2, 2026-05-30). Per-canonical ordered tag
+    # preference list that drives the sat_concept_value collapse
+    # decision deterministically. Replaces the previous MIN(value)
+    # tie-breaker (which biased values low when companies reported
+    # multiple revenue alias tags for the same period — Apple FY2019
+    # rendered at ~$70B vs actual ~$260B in the session 1 PBI smoke
+    # test). Rank 1 = most-preferred tag per canonical_concept; INNER
+    # JOIN against this seed in sat_concept_value enforces that every
+    # mapped tag has an explicit preference rank (a tag missing from
+    # this seed will fail the join and surface as a missing-config
+    # signal). column_types pinned same as the dictionary seed —
+    # varchar identifiers + smallint rank.
+    canonical_concept_tag_preference:
+      +column_types:
+        canonical_concept: varchar(64)
+        concept_name: varchar(128)
+        preference_rank: smallint

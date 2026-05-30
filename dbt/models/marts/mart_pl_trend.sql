@@ -162,12 +162,17 @@ pit_resolved AS (
 
 sat_resolved AS (
     -- Equi-join sat_concept_value on the PIT-resolved (link_hk, ldts)
-    -- coordinate. This is the join the PIT was built to make cheap —
-    -- a single equi-join replaces what would otherwise be a
-    -- MAX(load_datetime) WHERE load_datetime <= as_of_date correlated
-    -- subquery per row. Canonical concept filter applied here against
-    -- the income_statement canonicals only. accession_number carried
-    -- through for the downstream comparatives-dedup step (Risk 42).
+    -- coordinate. Canonical concept filter applied here against the
+    -- income_statement canonicals only. accession_number + period_start_date
+    -- carried through for the Risk 42 + Risk 48 dedup steps. Risk 48
+    -- sanity filter (period span ~365 days + year(period_end) matches
+    -- fiscal_year ± 1) applied here to drop the intra-accession period-
+    -- chunk rows that SEC XBRL tags as fp=FY but actually span quarters
+    -- or half-years (Apple FY2019 10-K reports 11 rows all tagged fp=FY
+    -- fy=2019 across 3 actual FY periods + 8 quarter/half-year chunks).
+    -- Without the filter, the Risk 42 dedup picks one of the 11 non-
+    -- deterministically (all share accession_number, so accession_number
+    -- DESC tie-breaker is degenerate).
     SELECT
         pr.hub_company_hk,
         pr.as_of_date,
@@ -175,6 +180,7 @@ sat_resolved AS (
         pr.period_end_date,
         scv.canonical_concept,
         scv.accession_number,
+        scv.period_start_date,
         scv.value AS value_numeric,
         scv.unit
     FROM pit_resolved pr
@@ -182,6 +188,8 @@ sat_resolved AS (
         ON scv.link_filing_concept_period_hk = pr.link_filing_concept_period_hk
         AND scv.load_datetime = pr.sat_concept_value_ldts
     WHERE scv.canonical_concept IN ('revenue', 'net_income')
+      AND date_diff('day', scv.period_start_date, scv.period_end_date) BETWEEN 350 AND 380
+      AND year(scv.period_end_date) IN (scv.fiscal_year, scv.fiscal_year + 1)
 ),
 
 company_resolved AS (

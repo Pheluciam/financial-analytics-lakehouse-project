@@ -1606,13 +1606,102 @@ Three Risks banked at session 1 build:
   mart_pl_trend: some fiscal_years render at the smaller-Revenue-alias
   value, biasing low for years where Apple reported both 'Revenues'
   and 'RevenueFromContractWithCustomerExcludingAssessedTax'. NOT a
-  mart bug — collapse decision is upstream at sat_concept_value. Phase
-  4 follow-up at session 2 design pass.
+  mart bug — collapse decision is upstream at sat_concept_value.
+  RESOLVED at session 2 (subsection 9.3) via preferred-tag seed +
+  ORDER BY value DESC primary; mart-layer artifact also surfaces a
+  deeper Risk 48 intra-accession period-chunk filter.
 
 Two ODBC-driver-specific Risks (40, 41) also banked from the install
 path — see LEARNINGS.md Phase 4 forward-verify subsection.
 
-### 9.3 Verify surface
+### 9.3 Phase 4 session 2 — mart_peer_benchmark + Risk 45 v2 / Risk 47 / Risk 48 cascade
+
+Shipped 2026-05-30. Second Gold mart + a 3-Risk design pass on the
+sat_concept_value collapse + mart-layer comparatives dedup. Full
+narrative in [GOLD_MARTS_PIPELINE.md](GOLD_MARTS_PIPELINE.md)
+section 8; this subsection is the DBT-anchored pointer.
+
+**mart_peer_benchmark.** Cross-company peer benchmarking at FY
+snapshots over the S&P 100 universe. Composite natural PK
+(cik, as_of_date, fiscal_year, canonical_concept) — identical grain
+to mart_pl_trend. Filter surface = canonical_concept IN ('revenue',
+'net_income', 'assets') AND fiscal_period = 'FY'. Three concepts span
+income statement + balance sheet for the peer-benchmarking lens.
+Surrogate single-column PK mart_peer_benchmark_hk via SHA-256. JOIN
+topology = identical 5-step BV + RV equi-join chain as mart_pl_trend;
+differentiator is two trailing peer-aggregation CTEs (peer_stats =
+GROUP BY partition aggregates + peer_ranked = window functions for
+per-row RANK + CUME_DIST). approx_percentile for peer_median —
+Athena Engine 3 deterministic bounded-error algorithm, error tolerance
+trivial at S&P 100 scale. Single S&P 100 peer group (sector-segment
+groups deferred to session 3 alongside the cik → sector seed). Row
+count = 29,936 at session 2 close (10,600 assets + 9,775 revenue +
+9,561 net_income).
+
+**Risk 45 v2 — sat_concept_value collapse refactor.** New seed
+`canonical_concept_tag_preference` (8 rows: per-canonical ordered tag
+preference list). sat_concept_value's canonical_observations CTE now
+retains concept_name through the join chain; new preference_ranked
+CTE INNER JOINs to the seed to attach preference_rank;
+collapsed_observations CTE replaces MIN(value) GROUP BY with
+ROW_NUMBER() OVER (PARTITION BY natural cardinal tuple ORDER BY
+value DESC, preference_rank ASC) keeping rn=1. value DESC primary =
+analyst-correct headline number wins; preference_rank ASC secondary =
+deterministic tie-breaker between equal values only. Full-refresh
+rebuild propagates through PIT + Bridge + marts cascade.
+
+**Risk 47 — v1→v2 flip.** v1 of the Risk 45 fix used ORDER BY
+preference_rank ASC PRIMARY (seed-driven tag selection). v1 surfaced
+the ASC-606-transition anti-pattern in the PBI smoke test — Apple
+FY2019 rendered at $62.9B (preferred-tag `Revenues` = $62.9B, the
+analyst-correct `RevenueFromContractWithCustomerExcludingAssessedTax`
+= $260B). v1 was WORSE than the original MIN-collapse ($70B). Banked
+as Risk 47 + flipped immediately to v2 (value DESC primary).
+
+**Risk 48 — mart-dedup intra-accession period-chunk filter.** After
+the Risk 45 v2 cascade, Apple FY2019 STILL rendered at $62.9B. Diagnosis
+via direct Athena query against sat_concept_value: 11 rows for
+(cik=Apple, accession=0000320193-19-000119, canonical=revenue,
+fiscal_year=2019, fiscal_period=FY) across 11 different
+period_start_date / period_end_date tuples. Root cause: SEC XBRL tags
+ALL period observations reported in a 10-K with fp=FY fy=filing_year,
+including quarter / half-year chunks AND prior-year comparatives.
+sat_concept_value's natural PK includes period dates so the 11 rows
+are legitimate at the sat grain — the mart grain doesn't include
+period dates, so all 11 collapse into a single Risk 42 ROW_NUMBER
+ORDER BY accession_number DESC bucket, and Athena picks
+non-deterministically (degenerate ORDER BY tie-breaker since all 11
+share accession_number).
+
+Risk 48 fix applied at both marts' sat_resolved CTE:
+
+- `year(period_end_date) IN (fiscal_year, fiscal_year + 1)` — drops
+  prior-year comparatives misaligned to the filing's fy tag. The
+  fy+1 case handles retailer FY-end conventions (e.g., Walmart FY2019
+  ends late-Jan 2020 → period_end_date.year = 2020 = fy+1).
+- For income-statement canonicals only (revenue + net_income), an
+  additional constraint: `date_diff('day', period_start_date,
+  period_end_date) BETWEEN 350 AND 380` — drops Q1/Q2/H1/Q4-single-
+  quarter period chunks. Balance sheet canonicals (assets) are exempt
+  from the span filter because point-in-time balance sheet
+  observations have period_start_date NULL or = period_end_date so
+  date_diff would be 0 (outside the band). The year filter alone
+  correctly drops prior-year balance sheet comparatives.
+
+Both filters together resolve the 11-row Apple FY2019 case to a single
+row at $260.174B (the actual FY2019 full-year revenue).
+
+**Verify cascade.** sat_concept_value full-refresh PASS=45 (sat + BV +
+schema tests); first mart_peer_benchmark build PASS=27 (1 model + 26
+schema tests); Risk 48 cascade PASS=47 (2 marts + 45 schema tests);
+mart_peer_benchmark Risk 48 v2 build PASS=27 (assets concept restored
+via per-concept conditional). Athena Console post-cascade verify:
+sql/verify/13 14/14 PASS (mart_pl_trend row count 19,336 post-Risk-48
+filter), sql/verify/14 17/17 PASS (mart_peer_benchmark row count
+29,936). Mart-shape PBI smoke test PASS: Apple FY2019 revenue =
+$260.174B confirmed at the analyst-facing surface.
+
+### 9.4 Verify surface
 
 Schema tests: 20 tests in [dbt/models/marts/_models.yml](dbt/models/marts/_models.yml)
 (1 unique_combination_of_columns + 10 not_null + 1 unique +

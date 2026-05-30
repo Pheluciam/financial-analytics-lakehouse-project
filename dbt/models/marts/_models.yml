@@ -186,3 +186,213 @@ models:
           - not_null
           - accepted_values:
               values: ['mart.mart_pl_trend']
+
+  - name: mart_peer_benchmark
+    description: |
+      Gold-layer Peer Benchmarking mart. Cross-company peer benchmarking
+      at FY snapshots over the S&P 100 universe. For each
+      (cik, as_of_date, fiscal_year, canonical_concept) row, projects
+      the company's value alongside peer-group aggregates (peer_count,
+      peer_mean, peer_median, peer_stddev, peer_min, peer_max) and the
+      company's per-peer-group rank + percentile (peer_rank,
+      peer_percentile). Filter surface = (canonical_concept IN
+      ('revenue', 'net_income', 'assets') AND fiscal_period = 'FY')
+      — three concepts span income statement (revenue + net_income) and
+      balance sheet (assets); liabilities + stockholders_equity excluded
+      for session 2 (more meaningful as ratios in mart_financial_health
+      at session 3). Peer group = single S&P 100 group (sector-segment
+      groups deferred to session 3 alongside mart_financial_health).
+      Composite natural PK (cik, as_of_date, fiscal_year, canonical_concept)
+      enforced at test time via dbt_utils.unique_combination_of_columns
+      below. Single-column surrogate PK = mart_peer_benchmark_hk via
+      SHA-256 over the composite. JOIN topology identical to mart_pl_trend
+      (5-step BV+RV equi-join chain); 3 trailing peer-aggregation CTEs
+      (deduped → peer_stats → peer_ranked) wrap the rank+percentile
+      computation. approx_percentile used for peer_median (Athena
+      Engine 3 deterministic algorithm with bounded error, error
+      tolerance trivial at S&P 100 scale). Upstream Risk 45 cascade
+      (Phase 4 session 2) shifts sat_concept_value collapse semantics
+      from MIN(value) to preferred-tag deterministic — peer benchmarks
+      now compute against analyst-correct base values. Materialized as
+      Iceberg table per marts layer defaults — full rebuild per dbt run,
+      Risk 2 Iceberg-merge bug class structurally avoided. Walkthrough:
+      GOLD_MARTS_PIPELINE.md section 5.2 at repo root + DBT_PIPELINE.md
+      section 9.2.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cik
+            - as_of_date
+            - fiscal_year
+            - canonical_concept
+    columns:
+      - name: mart_peer_benchmark_hk
+        description: |
+          SHA-256 hash of (cik || '||' || as_of_date || '||' ||
+          fiscal_year || '||' || canonical_concept), hex-encoded.
+          Single-column surrogate primary key matching the project's
+          hash-chain convention. Composite natural PK enforced at test
+          time via dbt_utils.unique_combination_of_columns above.
+        tests:
+          - not_null
+          - unique
+
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. Foreign key into
+          hub_company. FK relationships test below guards lineage
+          closure to the Raw Vault hub.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('hub_company')
+              field: cik
+
+      - name: entity_name
+        description: |
+          Company entity name as reported in the SEC EDGAR companyfacts
+          cover page (e.g., "Apple Inc."). Sourced via INNER JOIN to
+          sat_company_metadata on hub_company_hk. Denormalized descriptor
+          present on the mart for Power BI peer-comparison visualization
+          without requiring a downstream JOIN.
+        tests:
+          - not_null
+
+      - name: as_of_date
+        description: |
+          Fiscal year-end snapshot date this mart row applies to (DATE
+          type). FK into dim_as_of_dates. 10 distinct values per refresh.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_as_of_dates')
+              field: as_of_date
+
+      - name: fiscal_year
+        description: |
+          Fiscal year as reported by the company (INTEGER). All rows
+          satisfy fiscal_period = 'FY' by the upstream filter.
+        tests:
+          - not_null
+
+      - name: canonical_concept
+        description: |
+          Canonical concept name (varchar). One of 'revenue', 'net_income',
+          or 'assets' — the three peer-benchmarking concepts spanning
+          income statement + balance sheet. FK into hub_concept via the
+          hub's canonical_concept business key.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['revenue', 'net_income', 'assets']
+          - relationships:
+              to: ref('hub_concept')
+              field: canonical_concept
+
+      - name: value_numeric
+        description: |
+          Reported financial value in USD (DECIMAL(28,2)). Resolved from
+          sat_concept_value at the PIT-resolved sat coordinate. Post-
+          Risk-45 cascade — collapse semantics now driven by the
+          canonical_concept_tag_preference seed rather than MIN(value).
+          Authoritative analyst-facing fact column. Never NULL by upstream
+          INNER JOIN construction.
+        tests:
+          - not_null
+
+      - name: unit
+        description: |
+          Reporting currency code (varchar). Constant 'USD' under current
+          scope.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['USD']
+
+      - name: peer_count
+        description: |
+          Count of companies in the peer-group partition this row
+          belongs to (BIGINT). Partition key = (as_of_date, fiscal_year,
+          canonical_concept). Equals the size of the visible S&P 100
+          subset at that snapshot × FY × concept (≤100, may be less if
+          some companies hadn't filed by the as_of_date).
+        tests:
+          - not_null
+
+      - name: peer_mean
+        description: |
+          Arithmetic mean of value_numeric across the peer-group
+          partition (DECIMAL or DOUBLE per AVG return type). Same
+          partition as peer_count.
+        tests:
+          - not_null
+
+      - name: peer_median
+        description: |
+          Approximate median of value_numeric across the peer-group
+          partition (DOUBLE). Computed via approx_percentile(value, 0.5)
+          — Athena Engine 3 deterministic bounded-error algorithm,
+          error tolerance trivial at S&P 100 scale.
+        tests:
+          - not_null
+
+      - name: peer_stddev
+        description: |
+          Population standard deviation of value_numeric across the
+          peer-group partition (DOUBLE). NULLable when peer_count = 1
+          (single-company partition has no spread).
+
+      - name: peer_min
+        description: |
+          Minimum value_numeric across the peer-group partition. Same
+          partition as peer_count.
+        tests:
+          - not_null
+
+      - name: peer_max
+        description: |
+          Maximum value_numeric across the peer-group partition. Same
+          partition as peer_count.
+        tests:
+          - not_null
+
+      - name: peer_rank
+        description: |
+          This company's rank within the peer-group partition by
+          value_numeric DESC (INTEGER, 1 = highest in peer group). Ties
+          share rank, next rank jumps per SQL RANK() semantics.
+        tests:
+          - not_null
+
+      - name: peer_percentile
+        description: |
+          This company's percentile within the peer-group partition
+          (DOUBLE, [1/peer_count, 1.0]). Computed via CUME_DIST() ORDER
+          BY value_numeric ASC — 1.0 = highest value in peer group,
+          fraction = proportion of peers at-or-below.
+        tests:
+          - not_null
+
+      - name: period_end_date
+        description: |
+          Calendar date the reported value applies to (DATE) — the
+          fiscal-year-end for the row's FY filing.
+        tests:
+          - not_null
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) recording when this mart row was materialized
+          by the most recent dbt run. Same value for every row per
+          refresh (mart is fully rebuilt each run).
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          String identifier of the source system / process this mart row
+          was generated by. Constant 'mart.mart_peer_benchmark'.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['mart.mart_peer_benchmark']

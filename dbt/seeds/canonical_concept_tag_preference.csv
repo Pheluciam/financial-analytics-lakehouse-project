@@ -1,0 +1,9 @@
+canonical_concept,concept_name,preference_rank
+revenue,Revenues,1
+revenue,RevenueFromContractWithCustomerExcludingAssessedTax,2
+revenue,RevenueFromContractWithCustomerIncludingAssessedTax,3
+revenue,SalesRevenueNet,4
+net_income,NetIncomeLoss,1
+assets,Assets,1
+liabilities,Liabilities,1
+stockholders_equity,StockholdersEquity,1
