@@ -63,3 +63,117 @@ seeds:
                 - 'income_statement'
                 - 'balance_sheet'
                 - 'cash_flow'
+
+  - name: canonical_concept_tag_preference
+    description: |
+      Per-canonical ordered tag preference list. Tie-breaker for the
+      sat_concept_value collapse decision when multiple US-GAAP tags
+      report identical values for the same (cik, accession, canonical,
+      period) tuple. Shipped at Phase 4 session 2 (Risk 45 v2, 2026-05-30)
+      and extended at Phase 4 session 3 alongside the canonical seed
+      expansion to 13 in-scope tags. preference_rank ASC = most-preferred
+      first; INNER JOIN in sat_concept_value enforces that every mapped
+      tag in canonical_concepts_dictionary has an explicit rank entry.
+    columns:
+      - name: canonical_concept
+        description: |
+          Project-canonical concept name. Must match a value present in
+          canonical_concepts_dictionary.canonical_concept.
+        tests:
+          - not_null
+
+      - name: concept_name
+        description: |
+          Raw XBRL US-GAAP tag name. Composite PK column alongside
+          canonical_concept — one row per (canonical_concept, concept_name).
+        tests:
+          - not_null
+
+      - name: preference_rank
+        description: |
+          1-indexed preference rank. 1 = most preferred for the canonical.
+          Tie-breaker only — primary collapse driver in sat_concept_value
+          is value DESC (analyst-correct headline number).
+        tests:
+          - not_null
+
+  - name: sp100_company_sector
+    description: |
+      cik → GICS sector + industry group reference for the S&P 100
+      universe. Shipped at Phase 4 session 3 (2026-05-30) to enable the
+      sector-segmented peer benchmarking cascade in mart_peer_benchmark
+      and a sector slicer surface across Phase 4 marts in Power BI.
+
+      Authoritative source for ticker → cik mapping: SEC EDGAR
+      https://www.sec.gov/files/company_tickers.json (public, no auth).
+      cik values are 10-digit zero-padded SEC Central Index Keys —
+      matches hub_company.cik exactly so JOIN by cik is collision-free.
+
+      GICS taxonomy = 11 sectors × 24 industry groups, per the 2023 S&P
+      / MSCI reclassification. Sector + industry group columns are
+      stable values curated against the S&P 100 constituent roster.
+      Universe is broader than the current dbt hub_company on purpose —
+      LEFT JOIN by cik in marts means CIKs without a sector row degrade
+      gracefully to NULL (COALESCE to 'UNCATEGORIZED' at the mart layer).
+      Seed expansion = add rows when the S&P 100 roster changes or when
+      new CIKs land in the extract universe.
+
+      Composite PK = (cik). Ticker carried for human readability + future
+      PBI tooltip use; not used as a JOIN key downstream.
+    columns:
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. Primary key for
+          this seed. Must match hub_company.cik exactly.
+        tests:
+          - not_null
+          - unique
+
+      - name: ticker
+        description: |
+          Exchange ticker symbol as reported by SEC EDGAR. Stable
+          identifier for human-readable display in Power BI; not used
+          as a JOIN key downstream because hub_company doesn't carry it.
+        tests:
+          - not_null
+
+      - name: entity_name
+        description: |
+          Company entity name as reported by SEC EDGAR's
+          company_tickers.json. Reference descriptor — sat_company_metadata
+          remains the authoritative entity_name source for marts
+          (companyfacts cover page wording can differ from the tickers
+          file).
+        tests:
+          - not_null
+
+      - name: gics_sector
+        description: |
+          GICS Level-1 sector classification — one of the 11 standard
+          sectors. Drives the mart_peer_benchmark sector-segmented peer
+          group partition (Option A cascade shipped at session 3) and
+          the cross-mart sector slicer surface in Power BI.
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - 'Energy'
+                - 'Materials'
+                - 'Industrials'
+                - 'Consumer Discretionary'
+                - 'Consumer Staples'
+                - 'Health Care'
+                - 'Financials'
+                - 'Information Technology'
+                - 'Communication Services'
+                - 'Utilities'
+                - 'Real Estate'
+
+      - name: gics_industry_group
+        description: |
+          GICS Level-2 industry group classification — one of the 24
+          standard industry groups under the 11 sectors. Carried for
+          finer-grained future PBI drilldowns; not currently used as a
+          mart partition key.
+        tests:
+          - not_null

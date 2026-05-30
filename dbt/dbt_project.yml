@@ -176,3 +176,21 @@ seeds:
         canonical_concept: varchar(64)
         concept_name: varchar(128)
         preference_rank: smallint
+    # sp100_company_sector — cik → GICS sector + industry group reference
+    # (Phase 4 session 3, 2026-05-30). Drives the mart_peer_benchmark
+    # sector-segment partition cascade (Option A) and surfaces sector as a
+    # PBI slicer / filter dimension across all Phase 4 marts. GICS 11-sector
+    # / 24-industry-group taxonomy (S&P + MSCI standard, 2023 reclassification).
+    # CIK column pinned varchar(10) to preserve SEC's 10-digit zero-padded
+    # identifier convention (matches hub_company.cik exactly so LEFT JOIN
+    # by cik is collision-free). Seed sourced from SEC EDGAR
+    # https://www.sec.gov/files/company_tickers.json for the authoritative
+    # ticker → cik resolution; sector mappings curated against S&P 100
+    # constituents (2025-12 roster snapshot). Expansion = add rows.
+    sp100_company_sector:
+      +column_types:
+        cik: varchar(10)
+        ticker: varchar(16)
+        entity_name: varchar(256)
+        gics_sector: varchar(64)
+        gics_industry_group: varchar(96)

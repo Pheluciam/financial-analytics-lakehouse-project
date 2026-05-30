@@ -36,8 +36,15 @@ models:
       - name: concept_name
         description: |
           Raw XBRL concept name as reported under facts.us-gaap. One of
-          the 8 in the intermediate model's concept list — 4 revenue
-          aliases plus the 4 single-canonical concepts.
+          the 13 in the intermediate model's concept list — 4 revenue
+          aliases plus 9 single-canonical concepts spanning income
+          statement (NetIncomeLoss, OperatingIncomeLoss, GrossProfit,
+          CostOfRevenue), balance sheet (Assets, Liabilities,
+          StockholdersEquity, CashAndCashEquivalentsAtCarryingValue),
+          and cash flow (NetCashProvidedByUsedInOperatingActivities).
+          Seed expansion at Phase 4 session 3 (2026-05-30) added the
+          5 IS-depth + BS-cash + CF-operating tags driving the
+          mart_financial_health ratio surface.
         tests:
           - not_null
           - accepted_values:
@@ -47,9 +54,14 @@ models:
                 - 'RevenueFromContractWithCustomerExcludingAssessedTax'
                 - 'RevenueFromContractWithCustomerIncludingAssessedTax'
                 - 'NetIncomeLoss'
+                - 'OperatingIncomeLoss'
+                - 'GrossProfit'
+                - 'CostOfRevenue'
                 - 'Assets'
                 - 'Liabilities'
                 - 'StockholdersEquity'
+                - 'CashAndCashEquivalentsAtCarryingValue'
+                - 'NetCashProvidedByUsedInOperatingActivities'
 
       - name: unit
         description: |
@@ -143,9 +155,14 @@ models:
               values:
                 - 'revenue'
                 - 'net_income'
+                - 'operating_income'
+                - 'gross_profit'
+                - 'cost_of_revenue'
                 - 'assets'
                 - 'liabilities'
                 - 'stockholders_equity'
+                - 'cash_and_equivalents'
+                - 'operating_cash_flow'
 
       - name: business_area
         description: |

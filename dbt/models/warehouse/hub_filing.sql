@@ -51,9 +51,14 @@
     'RevenueFromContractWithCustomerExcludingAssessedTax',
     'RevenueFromContractWithCustomerIncludingAssessedTax',
     'NetIncomeLoss',
+    'OperatingIncomeLoss',
+    'GrossProfit',
+    'CostOfRevenue',
     'Assets',
     'Liabilities',
-    'StockholdersEquity'
+    'StockholdersEquity',
+    'CashAndCashEquivalentsAtCarryingValue',
+    'NetCashProvidedByUsedInOperatingActivities'
 ] %}
 
 WITH source AS (

@@ -4,6 +4,11 @@ revenue,RevenueFromContractWithCustomerExcludingAssessedTax,2
 revenue,RevenueFromContractWithCustomerIncludingAssessedTax,3
 revenue,SalesRevenueNet,4
 net_income,NetIncomeLoss,1
+operating_income,OperatingIncomeLoss,1
+gross_profit,GrossProfit,1
+cost_of_revenue,CostOfRevenue,1
 assets,Assets,1
 liabilities,Liabilities,1
 stockholders_equity,StockholdersEquity,1
+cash_and_equivalents,CashAndCashEquivalentsAtCarryingValue,1
+operating_cash_flow,NetCashProvidedByUsedInOperatingActivities,1

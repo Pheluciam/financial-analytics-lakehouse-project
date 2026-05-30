@@ -28,7 +28,10 @@
 --      for its partition.
 --  14. peer_percentile well-formed — every row's peer_percentile within (0, 1].
 --  15. peer_count consistency — every partition (as_of_date, fiscal_year,
---      canonical_concept) has the same peer_count on every row in it.
+--      canonical_concept, gics_sector) has the same peer_count on every
+--      row in it. Partition key extended at Phase 4 session 3 (Option A
+--      sector cascade, 2026-05-30) — pre-session-3 partition was the
+--      3-key (as_of_date, fiscal_year, canonical_concept) tuple.
 --  16. Mart hash determinism on Apple's first (as_of_date, fiscal_year,
 --      canonical_concept) tuple.
 --  17. Row count falls within prediction band [3,000, 60,000] — ~100
@@ -50,18 +53,21 @@ WITH apple_sample AS (
 
 partition_counts AS (
     -- Per-partition derived peer_count for check 15. Every row in the
-    -- same (as_of_date, fiscal_year, canonical_concept) partition should
-    -- carry the same peer_count value — equal to the actual row count
-    -- of the partition.
+    -- same (as_of_date, fiscal_year, canonical_concept, gics_sector)
+    -- partition should carry the same peer_count value — equal to the
+    -- actual row count of the partition. Partition key extended at Phase 4
+    -- session 3 (Option A sector cascade, 2026-05-30) to match the
+    -- mart's new peer_stats GROUP BY shape.
     SELECT
         as_of_date,
         fiscal_year,
         canonical_concept,
+        gics_sector,
         COUNT(*) AS derived_peer_count,
         MIN(peer_count) AS stored_peer_count_min,
         MAX(peer_count) AS stored_peer_count_max
     FROM financial_analytics_silver.mart_peer_benchmark
-    GROUP BY as_of_date, fiscal_year, canonical_concept
+    GROUP BY as_of_date, fiscal_year, canonical_concept, gics_sector
 ),
 
 checks AS (

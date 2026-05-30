@@ -289,6 +289,24 @@ models:
               to: ref('hub_concept')
               field: canonical_concept
 
+      - name: gics_sector
+        description: |
+          GICS Level-1 sector classification for this row's company
+          (varchar). Sourced via LEFT JOIN to sp100_company_sector by cik;
+          COALESCE to 'UNCATEGORIZED' for CIKs not in the seed. Peer
+          partition key — peer_count, peer_mean, peer_median, peer_rank,
+          peer_percentile all compute within (as_of_date, fiscal_year,
+          canonical_concept, gics_sector). Shipped at Phase 4 session 3
+          (Option A sector cascade, 2026-05-30).
+        tests:
+          - not_null
+
+      - name: gics_industry_group
+        description: |
+          GICS Level-2 industry group classification (varchar). Sourced
+          via LEFT JOIN to sp100_company_sector; NULL for CIKs not in the
+          seed. NOT used as a partition key — carried for PBI drilldown.
+
       - name: value_numeric
         description: |
           Reported financial value in USD (DECIMAL(28,2)). Resolved from
@@ -396,3 +414,187 @@ models:
           - not_null
           - accepted_values:
               values: ['mart.mart_peer_benchmark']
+
+  - name: mart_financial_health
+    description: |
+      Gold-layer Financial Health mart. Per-company annual ratios spanning
+      the income statement, balance sheet, and cash flow statement.
+      Composite natural PK (cik, as_of_date, fiscal_year) — different
+      grain from the prior 2 marts (no canonical_concept in grain because
+      each row carries multiple canonical values + derived ratios as
+      COLUMNS via a MAX(CASE WHEN canonical=X THEN value END) pivot on
+      the deduped CTE). 9 in-scope canonicals span IS (revenue,
+      gross_profit, operating_income, net_income), BS (assets,
+      liabilities, stockholders_equity, cash_and_equivalents), and CF
+      (operating_cash_flow). 8 derived ratios projected: gross_margin,
+      operating_margin, net_margin, return_on_assets, return_on_equity,
+      debt_to_equity, operating_cf_margin, cash_to_assets. NULLIF guards
+      every denominator — companies that don't report a given canonical
+      surface NULL ratios honestly (banks rarely report GrossProfit;
+      REITs rarely report this OCF tag). Risk 48 per-concept-type
+      conditional period filter at sat_resolved CTE — IS+CF canonicals
+      get the 350-380 day span filter; BS canonicals (instant-period
+      point-in-time observations) are exempt. JOIN topology identical
+      to mart_pl_trend / mart_peer_benchmark (5-step BV+RV equi-join
+      chain); trailing CTEs deduped → pivoted → with_ratios → hashed.
+      Materialized as Iceberg table per marts layer defaults — full
+      rebuild per dbt run. Walkthrough: GOLD_MARTS_PIPELINE.md section 9
+      + DBT_PIPELINE.md section 9.5.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cik
+            - as_of_date
+            - fiscal_year
+    columns:
+      - name: mart_financial_health_hk
+        description: |
+          SHA-256 hash of (cik || '||' || as_of_date || '||' ||
+          fiscal_year), hex-encoded. Single-column surrogate primary key
+          matching the project's hash-chain convention. Composite natural
+          PK enforced at test time via dbt_utils.unique_combination_of_columns
+          above.
+        tests:
+          - not_null
+          - unique
+
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. FK into hub_company.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('hub_company')
+              field: cik
+
+      - name: entity_name
+        description: |
+          Company entity name (e.g., "Apple Inc."). Sourced via INNER JOIN
+          to sat_company_metadata on hub_company_hk.
+        tests:
+          - not_null
+
+      - name: as_of_date
+        description: |
+          Fiscal year-end snapshot date (DATE). FK into dim_as_of_dates.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_as_of_dates')
+              field: as_of_date
+
+      - name: fiscal_year
+        description: |
+          Fiscal year as reported by the company (INTEGER).
+        tests:
+          - not_null
+
+      - name: period_end_date
+        description: |
+          Calendar date the reported fiscal-year-end falls on (DATE).
+          MAX across the pre-pivot rows in the partition — defensive
+          tie-breaker for the rare BS-vs-IS calendar straddle case.
+        tests:
+          - not_null
+
+      - name: revenue
+        description: |
+          Top-line revenue (DECIMAL(28,2)). NULL if no revenue canonical
+          was reported for the company at this snapshot/FY. Post-Risk-45
+          collapse semantics — analyst-correct headline value via the
+          canonical_concept_tag_preference seed.
+
+      - name: gross_profit
+        description: |
+          Gross profit (DECIMAL(28,2)). NULL if GrossProfit not reported
+          for the company (common for financial-services entities).
+
+      - name: operating_income
+        description: |
+          Operating income (DECIMAL(28,2)). NULL if OperatingIncomeLoss
+          not reported.
+
+      - name: net_income
+        description: |
+          Net income (DECIMAL(28,2)).
+
+      - name: assets
+        description: |
+          Total assets (DECIMAL(28,2)) — point-in-time at period_end_date.
+
+      - name: liabilities
+        description: |
+          Total liabilities (DECIMAL(28,2)) — point-in-time at period_end_date.
+
+      - name: stockholders_equity
+        description: |
+          Total stockholders' equity (DECIMAL(28,2)) — point-in-time at
+          period_end_date.
+
+      - name: cash_and_equivalents
+        description: |
+          Cash and cash equivalents at carrying value (DECIMAL(28,2)) —
+          point-in-time at period_end_date.
+
+      - name: operating_cash_flow
+        description: |
+          Net cash provided by (used in) operating activities (DECIMAL(28,2))
+          — annual flow.
+
+      - name: gross_margin
+        description: |
+          gross_profit / revenue (DOUBLE). NULL if either numerator or
+          denominator is NULL or revenue = 0. Typical range [0, 1];
+          negative for distressed companies.
+
+      - name: operating_margin
+        description: |
+          operating_income / revenue (DOUBLE). NULL-safe.
+
+      - name: net_margin
+        description: |
+          net_income / revenue (DOUBLE). NULL-safe.
+
+      - name: return_on_assets
+        description: |
+          net_income / assets (DOUBLE). NULL-safe.
+
+      - name: return_on_equity
+        description: |
+          net_income / stockholders_equity (DOUBLE). NULL-safe. Can be
+          very large or negative for companies with very small or
+          negative book equity.
+
+      - name: debt_to_equity
+        description: |
+          liabilities / stockholders_equity (DOUBLE). NULL-safe.
+          Liabilities-based approximation — a true LongTermDebt-based
+          D/E is a deferred enhancement when LongTermDebt + ShortTermDebt
+          canonicals land in canonical_concepts_dictionary. Documented
+          for PBI consumers.
+
+      - name: operating_cf_margin
+        description: |
+          operating_cash_flow / revenue (DOUBLE). NULL-safe. NULL for
+          companies that don't report
+          NetCashProvidedByUsedInOperatingActivities under that exact
+          us-gaap tag (some entities use *ContinuingOperations variant).
+
+      - name: cash_to_assets
+        description: |
+          cash_and_equivalents / assets (DOUBLE). NULL-safe. Rough
+          liquidity proxy at the asset-share level.
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) — when this mart row was materialized.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          Constant 'mart.mart_financial_health'.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['mart.mart_financial_health']

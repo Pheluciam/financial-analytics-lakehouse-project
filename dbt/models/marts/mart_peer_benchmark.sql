@@ -39,16 +39,18 @@
 -- Annual filter. WHERE fiscal_period = 'FY' (same rationale as
 -- mart_pl_trend — analyst-conventional annual peer-benchmarking view).
 --
--- Peer group definition. Single S&P 100 universe peer group — every
--- company in the same as_of_date × fiscal_year × canonical_concept
--- partition is treated as a peer of every other company. Sector-segment
--- peer groups (Tech vs Consumer vs Financials, etc.) are a richer
--- benchmarking lens but require an additional cik → sector seed; that
--- expansion is deferred to Phase 4 session 3 alongside mart_financial_health.
--- For session 2, the simplest professional peer-group strategy ships,
--- and the partition-keyed window functions naturally extend to a richer
--- (sector × as_of_date × fiscal_year × canonical) partition spec when
--- the seed lands.
+-- Peer group definition. SECTOR-SEGMENTED — every company in the same
+-- (gics_sector × as_of_date × fiscal_year × canonical_concept) partition
+-- is treated as a peer of every other company. Sector cascade shipped
+-- at Phase 4 session 3 (Option A bundle, 2026-05-30) alongside the new
+-- sp100_company_sector seed; pre-session-3 partition was the single
+-- S&P 100 universe (gics_sector dimension absent). LEFT JOIN to the
+-- sector seed in sector_resolved CTE — CIKs without a sector row degrade
+-- to gics_sector = 'UNCATEGORIZED' so the cascade doesn't drop rows.
+-- The partition key change cascades into peer_stats GROUP BY and
+-- peer_ranked window function PARTITION BY without touching the natural
+-- PK (each cik has exactly one sector at any given time, so adding
+-- sector to the partition spec doesn't change row cardinality).
 --
 -- SEC income-statement comparatives dedup (LEARNINGS Risk 42 carry-
 -- forward from mart_pl_trend). Same ROW_NUMBER() OVER (PARTITION BY
@@ -86,8 +88,8 @@
 -- rationale as mart_pl_trend (SEC EDGAR companyfacts doesn't expose
 -- stock ticker; entity_name is the project's native company descriptor).
 --
--- JOIN topology. Identical 5-step equi-join chain over BV + RV as
--- mart_pl_trend:
+-- JOIN topology. 5-step equi-join chain over BV + RV (same as
+-- mart_pl_trend) + 1 LEFT JOIN to the sector seed:
 --   1. bridge_company_concept_period (base) — filter to fiscal_period = 'FY'
 --   2. → pit_link_filing_concept_period — resolves visible sat row at
 --        each as_of_date via (link_hk, as_of_date) equi-join
@@ -95,7 +97,11 @@
 --        (link_hk, load_datetime) equi-join; 3-concept filter applied here
 --   4. → hub_company — gets cik via hub_company_hk equi-join
 --   5. → sat_company_metadata — gets entity_name via hub_company_hk
--- Then 3 peer-aggregation CTEs: deduped → peer_stats → peer_ranked.
+--   6. LEFT JOIN sp100_company_sector by cik — attaches gics_sector +
+--        gics_industry_group; CIKs missing from the seed COALESCE to
+--        'UNCATEGORIZED'.
+-- Then 4 peer-aggregation CTEs: deduped → sector_resolved → peer_stats →
+-- peer_ranked. sector_resolved is the new CTE shipped at session 3.
 --
 -- Materialization. Plain Iceberg table per marts layer defaults in
 -- dbt_project.yml — full rebuild per dbt run, Risk 2 Iceberg-merge bug
@@ -230,31 +236,13 @@ deduped AS (
     WHERE rn = 1
 ),
 
-peer_stats AS (
-    -- Per-partition peer-group aggregates over single S&P 100 peer group.
-    -- Partition key = (as_of_date, fiscal_year, canonical_concept) —
-    -- one stats row per snapshot × fiscal year × concept. JOIN back to
-    -- the per-company surface in the next CTE.
-    SELECT
-        as_of_date,
-        fiscal_year,
-        canonical_concept,
-        COUNT(*) AS peer_count,
-        AVG(value_numeric) AS peer_mean,
-        approx_percentile(value_numeric, 0.5) AS peer_median,
-        STDDEV(value_numeric) AS peer_stddev,
-        MIN(value_numeric) AS peer_min,
-        MAX(value_numeric) AS peer_max
-    FROM deduped
-    GROUP BY as_of_date, fiscal_year, canonical_concept
-),
-
-peer_ranked AS (
-    -- Per-row peer rank + percentile over the same partition. RANK()
-    -- ORDER BY value_numeric DESC — 1 = highest in peer group (ties
-    -- share rank, next rank jumps). CUME_DIST() ORDER BY value_numeric
-    -- ASC — 1.0 = highest, fraction = proportion of peers at-or-below
-    -- (standard analyst percentile interpretation).
+sector_resolved AS (
+    -- Phase 4 session 3 sector cascade (Option A). LEFT JOIN the
+    -- sp100_company_sector seed by cik. COALESCE missing sector rows
+    -- to 'UNCATEGORIZED' / NULL industry group so CIKs outside the seed
+    -- universe still surface in their own degenerate partition rather
+    -- than dropping out of the mart. Each cik has exactly one sector,
+    -- so this JOIN doesn't change row cardinality.
     SELECT
         d.cik,
         d.entity_name,
@@ -264,6 +252,50 @@ peer_ranked AS (
         d.canonical_concept,
         d.value_numeric,
         d.unit,
+        COALESCE(s.gics_sector, 'UNCATEGORIZED') AS gics_sector,
+        s.gics_industry_group
+    FROM deduped d
+    LEFT JOIN {{ ref('sp100_company_sector') }} s
+        ON s.cik = d.cik
+),
+
+peer_stats AS (
+    -- Per-partition peer-group aggregates. Partition key now extends to
+    -- (as_of_date, fiscal_year, canonical_concept, gics_sector) — one
+    -- stats row per snapshot × fiscal year × concept × sector. JOIN back
+    -- to the per-company surface in the next CTE.
+    SELECT
+        as_of_date,
+        fiscal_year,
+        canonical_concept,
+        gics_sector,
+        COUNT(*) AS peer_count,
+        AVG(value_numeric) AS peer_mean,
+        approx_percentile(value_numeric, 0.5) AS peer_median,
+        STDDEV(value_numeric) AS peer_stddev,
+        MIN(value_numeric) AS peer_min,
+        MAX(value_numeric) AS peer_max
+    FROM sector_resolved
+    GROUP BY as_of_date, fiscal_year, canonical_concept, gics_sector
+),
+
+peer_ranked AS (
+    -- Per-row peer rank + percentile over the same partition. RANK()
+    -- ORDER BY value_numeric DESC — 1 = highest in sector peer group
+    -- (ties share rank, next rank jumps). CUME_DIST() ORDER BY
+    -- value_numeric ASC — 1.0 = highest, fraction = proportion of
+    -- sector peers at-or-below (standard analyst percentile interpretation).
+    SELECT
+        s.cik,
+        s.entity_name,
+        s.as_of_date,
+        s.fiscal_year,
+        s.period_end_date,
+        s.canonical_concept,
+        s.value_numeric,
+        s.unit,
+        s.gics_sector,
+        s.gics_industry_group,
         ps.peer_count,
         ps.peer_mean,
         ps.peer_median,
@@ -271,18 +303,19 @@ peer_ranked AS (
         ps.peer_min,
         ps.peer_max,
         CAST(RANK() OVER (
-            PARTITION BY d.as_of_date, d.fiscal_year, d.canonical_concept
-            ORDER BY d.value_numeric DESC
+            PARTITION BY s.as_of_date, s.fiscal_year, s.canonical_concept, s.gics_sector
+            ORDER BY s.value_numeric DESC
         ) AS INTEGER) AS peer_rank,
         CUME_DIST() OVER (
-            PARTITION BY d.as_of_date, d.fiscal_year, d.canonical_concept
-            ORDER BY d.value_numeric ASC
+            PARTITION BY s.as_of_date, s.fiscal_year, s.canonical_concept, s.gics_sector
+            ORDER BY s.value_numeric ASC
         ) AS peer_percentile
-    FROM deduped d
+    FROM sector_resolved s
     INNER JOIN peer_stats ps
-        ON ps.as_of_date = d.as_of_date
-        AND ps.fiscal_year = d.fiscal_year
-        AND ps.canonical_concept = d.canonical_concept
+        ON ps.as_of_date = s.as_of_date
+        AND ps.fiscal_year = s.fiscal_year
+        AND ps.canonical_concept = s.canonical_concept
+        AND ps.gics_sector = s.gics_sector
 ),
 
 hashed AS (
@@ -300,6 +333,8 @@ hashed AS (
         as_of_date,
         fiscal_year,
         canonical_concept,
+        gics_sector,
+        gics_industry_group,
         value_numeric,
         unit,
         peer_count,

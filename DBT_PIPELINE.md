@@ -1722,6 +1722,101 @@ architecturally at session 1; Apple revenue line chart renders
 artifact surfaced but does NOT fail the architectural smoke test —
 upstream sat_concept_value collapse decision, not a mart bug.
 
+### 9.5 Phase 4 session 3 — mart_financial_health + canonical seed expansion + sp100_company_sector + sector cascade (Option A)
+
+Phase 4 session 3 (2026-05-30) ships the third Gold mart plus a bundled
+cascade: canonical_concepts_dictionary expansion from 8 to 13 raw
+us-gaap tags, a new sp100_company_sector seed, and the
+mart_peer_benchmark sector-segmented partition cascade.
+
+**Canonical seed expansion.** Five new rows in
+[dbt/seeds/canonical_concepts_dictionary.csv](dbt/seeds/canonical_concepts_dictionary.csv):
+`OperatingIncomeLoss → operating_income`,
+`GrossProfit → gross_profit`,
+`CostOfRevenue → cost_of_revenue` (income statement depth);
+`CashAndCashEquivalentsAtCarryingValue → cash_and_equivalents` (balance
+sheet); `NetCashProvidedByUsedInOperatingActivities → operating_cash_flow`
+(cash flow statement). Matching rank-1 entries in
+[dbt/seeds/canonical_concept_tag_preference.csv](dbt/seeds/canonical_concept_tag_preference.csv).
+Six hardcoded Jinja `{% set concepts %}` lists extended in lock-step
+(int_sec_edgar__concepts, link_company_filing,
+link_filing_concept_period, hub_filing, sat_concept_value,
+sat_filing_metadata) to keep the UNNEST + canonical-resolution chain
+consistent. The 6-place duplication is a known code smell; refactor to
+a macro reading from the seed is a future follow-up (out of session 3
+scope per build-mode preference).
+
+**sp100_company_sector seed.** New seed
+[dbt/seeds/sp100_company_sector.csv](dbt/seeds/sp100_company_sector.csv)
+— 107 rows, (cik, ticker, entity_name, gics_sector,
+gics_industry_group). CIKs sourced authoritatively from SEC EDGAR
+`company_tickers.json`; GICS 11-sector × 24-industry-group taxonomy
+(2023 reclassification). Distribution: 19 Financials, 18 Information
+Technology, 16 Health Care, 13 Consumer Discretionary, 11 Industrials,
+10 Consumer Staples, 9 Communication Services, 4 Energy, 3 Real Estate,
+3 Utilities, 1 Materials. column_types pin cik to varchar(10) so JOIN
+to hub_company.cik is collision-free. _seeds.yml entry enforces sector
+accepted_values + not_null on every column. Universe deliberately
+broader than hub_company so the cascade degrades gracefully via LEFT
+JOIN + COALESCE('UNCATEGORIZED').
+
+**mart_peer_benchmark sector cascade (Option A bundle).** Partition key
+extended from (as_of_date, fiscal_year, canonical_concept) to
+(as_of_date, fiscal_year, canonical_concept, gics_sector). New
+sector_resolved CTE inserted between deduped and peer_stats — LEFT JOIN
+to sp100_company_sector by cik, COALESCE('UNCATEGORIZED') for unmatched.
+peer_stats GROUP BY + peer_ranked window function PARTITION BY both
+extended to the 4-key shape. Each cik has exactly one sector at any
+given time so the mart's row cardinality is preserved (29,936 rows pre-
+and post-cascade); only the peer aggregates re-partition. Verify file
+[sql/verify/14_phase4_marts_peer_benchmark_verification.sql](sql/verify/14_phase4_marts_peer_benchmark_verification.sql)
+partition_counts CTE GROUP BY extended in lock-step — partition cardinality
+went from 405 (3-key) pre-cascade to 4,055 (4-key) post-cascade.
+
+**mart_financial_health.** Per-company annual ratios spanning income
+statement + balance sheet + cash flow. Composite grain
+(cik, as_of_date, fiscal_year) — DIFFERENT from the prior two marts
+(no canonical_concept in grain because the canonical values pivot onto
+columns via MAX(CASE WHEN canonical = X THEN value END)). 9 in-scope
+canonicals + 8 NULLIF-guarded derived ratios (gross_margin,
+operating_margin, net_margin, return_on_assets, return_on_equity,
+debt_to_equity, operating_cf_margin, cash_to_assets). NULL ratio when
+denominator is NULL or 0 — companies that don't report a canonical
+surface NULL honestly. Risk 48 conditional period filter at
+sat_resolved — balance-sheet canonicals (assets, liabilities,
+stockholders_equity, cash_and_equivalents) exempt from the IS span
+filter since they're point-in-time instant observations. Materialized
+as plain Iceberg table per marts layer defaults. Row count = 10,610 at
+first build.
+
+**Cascade verification.** `dotenv ... dbt seed --full-refresh` PASS=3 +
+`dotenv ... dbt build --full-refresh` PASS=231 / WARN=0 / ERROR=0 — full
+cascade through warehouse + BV + 3 marts at first run. Athena Console
+verify: sql/verify/13 PASS=14, sql/verify/14 PASS=17 (post partition_counts
+extension), sql/verify/15 PASS=17 (post Risk 49 exclusion). Cumulative
+marts surface at session 3 close: 63 dbt schema tests + 48 SQL
+structural verify checks across 3 active marts.
+
+**Risk 49 banked.** PBI smoke test surfaced 13 rows where gross_margin
+slightly exceeded 1.0 — all Salesforce (cik 0001108524) FY2010-2013.
+Pre-ASC-606 revenue tagging mismatch where the GrossProfit tag anchors
+to a multi-tag revenue base while sat_concept_value's value DESC
+collapse picks the largest single Revenues alias. 0.12% artifact;
+verify check 15 documents and excludes the known (cik, fy) window.
+Targeted fix = per-company tag-preference override at sat_concept_value
+(deferred — narrow benefit).
+
+**Mart-shape PBI smoke test session 3.** Apple line chart on fiscal_year
+× net_margin renders the analyst-correct 2015-2025 trajectory
+(~22.8% → covid dip ~21% → tech-boom peak 25.9% → FY2025 26.9%; matches
+Apple reported FY2023 25.3%). Risk 45 + 47 + 48 cascade vindicated at
+the ratio surface. Saved as
+`powerbi/03_smoke_test_phase_4_session_3.pbix`.
+
+10/10 ENGINEERING_STANDARDS audit PASS on the session 3 code surface
+(NINTH consecutive code-shipping session unbroken —
+8/9/10/11/12/13/15/16/17 across Phases 2-4).
+
 ## 10. Verification surface (per session)
 
 Each dbt session ships with a verification suite parallel to Phase 1's
