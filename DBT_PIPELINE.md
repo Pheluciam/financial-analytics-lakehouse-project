@@ -1817,6 +1817,77 @@ the ratio surface. Saved as
 (NINTH consecutive code-shipping session unbroken —
 8/9/10/11/12/13/15/16/17 across Phases 2-4).
 
+### 9.6 Phase 4 session 4 — mart_growth_forecast + scripts/forecast.py + Option A forecast architecture
+
+Fourth Gold mart shipped 2026-05-30. `mart_growth_forecast` is a UNION
+over (a) the historical revenue rows from `mart_pl_trend` and (b) the
+Python-written forecast surface from `scripts/forecast.py`. Composite
+grain `(cik, canonical_concept, fiscal_year, as_of_date, row_kind)` —
+the `row_kind` discriminator ('historical' vs 'forecast') is the
+analyst-facing column PBI consumers filter / colour by. Full walkthrough
+in `GOLD_MARTS_PIPELINE.md` section 10.
+
+**Forecast architecture — Option A.** Direction-check at session 4
+kickoff (2026-05-30) evaluated three architectures: (A) Python writes
+Parquet to S3 + dbt-athena consumes via sources entry + external table,
+(B) Python writes to a Bronze staging table + dbt collapses, (C) Python
+writes the mart directly via Athena CTAS. Option A chosen — clean
+compute/consumption separation, preserves the dbt lineage / docs /
+schema-test surface for the mart, no extra Bronze hop.
+
+**zone=silver/ S3 prefix convention.** The forecast Parquet lands under
+`s3://<bucket>/zone=silver/forecasts/canonical_concept=<c>/as_of_date=<d>/`
+— matches the project's zone= S3 layout (zone=bronze/ raw, zone=silver/
+dbt-managed + this forecast surface, zone=gold/ reserved) AND inherits
+phil-dbt's existing `S3SilverReadWrite` IAM scope so no policy
+attachment is needed. Initial first cut targeted top-level `forecasts/`
+and hit `S3 PutObject AccessDenied` — banked as Risk 50 (LEARNINGS) for
+the forward-projection lesson on S3 prefix + IAM scope at design time.
+
+**Triple-pinned forecast schema.** The forecast Parquet schema is
+declared in three coordinated artefacts: `scripts/forecast.py`
+`FORECAST_SCHEMA` pyarrow schema, `sql/ddl/03_create_forecast_external_table.sql`
+column list, and `dbt/models/marts/_sources.yml` columns block. Schema
+drift between any two surfaces produces a Parquet column-mismatch error
+at first dbt build — coordinated changes across all three at every
+schema bump. Banked as Risk 51.
+
+**statsmodels models.** Per-company Holt-Winters Exponential Smoothing
+(additive trend) is the primary; ARIMA(1,1,0) drift-walk is the
+fallback for companies with fewer than 4 fiscal-year observations OR
+where the Holt-Winters fit raises. Companies with fewer than 2
+observations are skipped. 3-year forecast horizon with 95% prediction
+intervals. Risk 38 lock at Phase 3 session 14 forward-verify (statsmodels
+over Prophet on annual cadence + Stan C++ compile footprint).
+
+**dbt sources entry.** New `dbt/models/marts/_sources.yml` — registers
+the `forecast` source with the `forecast_surface` external table. dbt
+schema tests + lineage docs apply transparently. dbt's `{{ source(...) }}`
+ref drives the mart SQL's read of the forecast partition.
+
+**Cascade rebuild.** `dbt build --select +mart_growth_forecast`
+PASS=161 / WARN=0 / ERROR=0 / SKIP=0. dbt 1.10 `DeprecationsSummary` —
+54 occurrences of `MissingArgumentsPropertyInGenericTestDeprecation`
+across the schema YAMLs — informational only, future migration concern
+when dbt-core can move past 1.10.x (currently locked by Risk 30 = Glue
+Python Shell Python 3.9 ceiling).
+
+**Athena Console verify.** `sql/verify/16_phase4_marts_growth_forecast_verification.sql`
+18/18 PASS at first run (phil-admin, wg_financial_analytics, us-east-1).
+Total rows = 10,069 = 9,775 historical + 294 forecast (98 companies × 3
+forecast years; 1 S&P 100 entrant skipped on the single-observation
+threshold).
+
+**Mart-shape PBI smoke test.** Apple revenue historical + forecast
+overlay rendered cleanly via generic ODBC connector path (Navigator
+cache workaround carried forward from session 2). FY2009 ~$42B → FY2024
+~$391B → forecast 2026-2028 trending upward with 95% CI band visible.
+MAX aggregation chosen over SUM — the historical leg has 10 identical
+as_of_date snapshots per fiscal_year (no restatements yet at single
+Bronze extract), so SUM over-counts 10x. Documented as the analyst-
+facing aggregation convention for the mart in `GOLD_MARTS_PIPELINE.md`
+section 10.4. Saved as `powerbi/04_smoke_test_phase_4_session_4.pbix`.
+
 ## 10. Verification surface (per session)
 
 Each dbt session ships with a verification suite parallel to Phase 1's

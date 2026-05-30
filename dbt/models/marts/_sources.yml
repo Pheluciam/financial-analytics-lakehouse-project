@@ -1,0 +1,89 @@
+# Marts-layer source declarations — Phase 4 session 4 onwards.
+#
+# The "forecast" source registers the Python-written Parquet output from
+# scripts/forecast.py against the dbt catalog so mart_growth_forecast can
+# reference it via {{ source('forecast', 'forecast_surface') }}. The
+# underlying Athena/Glue Catalog table is created by
+# sql/ddl/03_create_forecast_external_table.sql — Option A forecast
+# architecture (Phase 4 session 4 kickoff direction-check, 2026-05-30).
+#
+# Schema drift contract — the column list below must match the FORECAST_SCHEMA
+# pin in scripts/forecast.py AND the CREATE EXTERNAL TABLE column list in
+# sql/ddl/03_create_forecast_external_table.sql byte-for-byte. Coordinated
+# changes across all three artefacts at every schema bump.
+
+version: 2
+
+sources:
+  - name: forecast
+    description: |
+      Python-written Parquet output from scripts/forecast.py — per-company
+      annual revenue forecast for the S&P 100 universe. Holt-Winters
+      Exponential Smoothing (additive trend) with ARIMA(1,1,0) drift-walk
+      fallback for short / non-trended series. 3-year horizon at 95%
+      prediction intervals. Risk 38 lock (statsmodels over Prophet,
+      Phase 3 session 14 forward-verify). Forecast architecture Option A
+      (Phase 4 session 4 direction-check) — Python writes Parquet directly
+      to S3, dbt-athena consumes via this external-table reference, clean
+      separation of compute and consumption layers.
+    database: awsdatacatalog
+    schema: financial_analytics_silver
+    tables:
+      - name: forecast_surface
+        description: |
+          Per-company × forecast-year forecast surface. One row per
+          (cik, canonical_concept, forecast_year, as_of_date) — composite
+          natural PK matches the mart_growth_forecast grain after the
+          UNION with historical mart_pl_trend rows. Partitioned by
+          (canonical_concept, as_of_date) with partition projection
+          (canonical_concept type=enum, as_of_date type=date) — see the
+          DDL for the rationale (LEARNINGS Phase 2 session 3 type=injected
+          carry-forward).
+        columns:
+          - name: cik
+            description: 10-digit zero-padded SEC Central Index Key.
+          - name: forecast_year
+            description: |
+              Forecast fiscal year — latest_historical_year + 1, +2, +3
+              for the 3-year horizon.
+          - name: forecast_value
+            description: |
+              Point forecast value in USD (DOUBLE). Holt-Winters or ARIMA
+              point estimate depending on model_name.
+          - name: lower_ci_95
+            description: Lower bound of the 95% prediction interval.
+          - name: upper_ci_95
+            description: Upper bound of the 95% prediction interval.
+          - name: model_name
+            description: |
+              'holt_winters_additive' (default) or 'arima_1_1_0' (fallback
+              for series with fewer than 4 observations OR where the
+              Holt-Winters fit raised).
+          - name: model_aic
+            description: |
+              Akaike Information Criterion of the model fit — lower = better
+              fit relative to model complexity. Surfaces in PBI as a
+              model-quality filter.
+          - name: historical_obs_count
+            description: |
+              Number of fiscal-year observations the model was fit on.
+              Typically 8-11 per company across the 10-year history; some
+              S&P 100 entrants have shorter histories.
+          - name: latest_historical_year
+            description: |
+              The most recent fiscal year in the company's history — the
+              anchor immediately before forecast_year.
+          - name: load_datetime
+            description: |
+              UTC timestamp when scripts/forecast.py wrote this row.
+          - name: record_source
+            description: Constant 'script.forecast.py'.
+          - name: canonical_concept
+            description: |
+              Partition column — canonical concept name. Single value
+              'revenue' for Phase 4 session 4; expansion to net_income /
+              operating_income is a future session.
+          - name: as_of_date
+            description: |
+              Partition column — date the forecast run was executed
+              (YYYY-MM-DD string).

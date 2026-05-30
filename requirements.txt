@@ -27,3 +27,26 @@ dbt-athena-community>=1.10.1
 # Banked as Risk 30 (Phase 3 session 12) — managed-runtime Python ceiling
 # vs tool Python floor cross-check at every adapter-or-tool version bump.
 dbt-core>=1.10.0,<1.11
+
+# statsmodels — classical time-series stack for Phase 4 session 4 forecast
+# pipeline (scripts/forecast.py). Provides statsmodels.tsa.holtwinters.ExponentialSmoothing
+# (per-company annual-revenue Holt-Winters fit + prediction intervals) and
+# statsmodels.tsa.arima.ARIMA (fallback for non-trended series). Pure-pip
+# install with NumPy + SciPy + Pandas + Patsy transitive deps; no C++
+# compilation step (vs Prophet's Stan backend). Risk 38 lock (Phase 3
+# session 14 forward-verify) — chosen on annual-cadence financial time
+# series workload: 10 fiscal year-ends × 100 companies × ~1 in-scope
+# canonical with 3-year forecast horizon + 95% prediction intervals.
+statsmodels>=0.14
+
+# pandas — DataFrame + groupby surface for the per-company forecast loop
+# in scripts/forecast.py. Already a transitive dep via dbt-core + statsmodels;
+# pinned explicitly here so the forecast script's import is self-documenting
+# in requirements.txt.
+pandas>=2.0
+
+# pyarrow — Parquet writer for the forecast pipeline output landing under
+# s3://phil-financial-analytics-lakehouse/forecasts/. Backs pandas.to_parquet
+# with the 'pyarrow' engine. Transitive via pyathena but pinned explicitly
+# here so the Parquet write path is self-documenting in requirements.txt.
+pyarrow>=14.0

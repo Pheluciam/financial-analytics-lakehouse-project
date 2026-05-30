@@ -4,37 +4,39 @@
 > medallion (S3 + Glue + Athena) → 5-page Power BI executive overview.
 > Project #3 of Phil's data engineering portfolio.
 
-**Status:** Phase 4 sessions 1+2+3 SHIPPED 2026-05-30. Three Gold marts
+**Status:** Phase 4 sessions 1+2+3+4 SHIPPED 2026-05-30. Four Gold marts
 live in `financial_analytics_silver` — `mart_pl_trend` (10-year P&L
 trend per S&P 100, 19,336 rows), `mart_peer_benchmark` (cross-company
-peer benchmarking at FY snapshots, 29,936 rows, now sector-segmented
-via session 3 sp100_company_sector seed cascade — peer aggregates +
-RANK + CUME_DIST percentile partition extended to 4-key
-(as_of_date, fiscal_year, canonical_concept, gics_sector)), and
+peer benchmarking at FY snapshots, 29,936 rows, sector-segmented),
 `mart_financial_health` (per-company annual ratios spanning income
 statement + balance sheet + cash flow, 10,610 rows, 9 canonicals
-pivoted onto columns + 8 NULLIF-guarded derived ratios — gross_margin,
-operating_margin, net_margin, return_on_assets, return_on_equity,
-debt_to_equity, operating_cf_margin, cash_to_assets). All three
-materialized as Iceberg/Parquet on the BV+RV equi-join chain. **63 dbt
-schema tests + 48 SQL structural verify checks + 3 mart-shape PBI
-Desktop smoke tests all PASS.** Session 3 ships canonical seed
-expansion 8 → 13 raw us-gaap tags (added OperatingIncomeLoss,
-GrossProfit, CostOfRevenue, CashAndCashEquivalentsAtCarryingValue,
-NetCashProvidedByUsedInOperatingActivities); new sp100_company_sector
-seed (107 rows, GICS 11-sector taxonomy, CIKs authoritative via SEC
-EDGAR company_tickers.json); mart_peer_benchmark sector cascade
-(Option A bundle); Risk 49 banked (Salesforce 2010-2013 pre-ASC-606
-gross_profit > revenue artifact, 0.12% of mart_financial_health rows —
-documented + excluded at verify, not at mart). Apple FY2023 net_margin
-renders at the analyst-correct 25.3%. 10/10 ENGINEERING_STANDARDS audit
-PASS sessions 1+2+3 — NINE-session unbroken streak. Phase 3 fully
+pivoted + 8 NULLIF-guarded derived ratios), and `mart_growth_forecast`
+(per-company annual revenue trajectory unifying 9,775 historical
+observed values from mart_pl_trend with 294 forward-looking 3-year
+forecasts — 98 companies × 3 forecast years — produced by
+`scripts/forecast.py` running statsmodels.tsa Holt-Winters Exponential
+Smoothing primary + ARIMA(1,1,0) drift-walk fallback + 95% prediction
+intervals). All four materialized as Iceberg/Parquet; forecast surface
+written to `s3://<bucket>/zone=silver/forecasts/` as Snappy Parquet
+consumed via dbt sources + external table. **84 dbt schema tests + 66
+SQL structural verify checks + 4 mart-shape PBI Desktop smoke tests
+all PASS.** Session 4 ships scripts/forecast.py (boto3 Athena → pandas
+→ statsmodels → pyarrow Parquet to S3) per the Phase 3 session 14
+Risk 38 lock (statsmodels over Prophet on annual cadence); forecast
+architecture Option A (Parquet to S3 + dbt sources) locked at session 4
+kickoff direction-check; triple-pinned forecast schema across the
+Python writer + DDL + dbt sources YAML; Risks 50-51 banked (50 =
+zone=silver/ S3 prefix + IAM scope forward-projection lesson; 51 =
+schema triple-pin coordinated-drift contract). Apple revenue FY2009
+~$42B → FY2024 ~$391B + 2026-2028 forecast with 95% CI band renders
+analyst-correct in PBI. 10/10 ENGINEERING_STANDARDS audit PASS
+sessions 1+2+3+4 — TEN-session unbroken streak. Phase 3 fully
 preserved underneath: end-to-end orchestrated dbt-on-Glue-Python-Shell
 via AWS Step Functions LIVE. Phase 2 Silver Data Vault 2.0 (3 hubs + 2
 links + 4 sats + 1 dim + 1 PIT + 1 Bridge, 121/121 + 114/114 verify)
-preserved; canonical seed expansion adds +110 schema tests at the
-warehouse/BV layers all PASS. Phase 4 sessions 4-5 next:
-mart_growth_forecast + Phase 4 CLOSE.
+preserved. Phase 4 session 5 next: Phase 4 CLOSE — structural audit +
+reflection rolling Phase 4 Risks 38-51 into pattern families + Phase 5
+PBI kickoff forward-verify.
 
 ---
 

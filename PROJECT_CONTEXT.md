@@ -15,12 +15,12 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 4 session 3 SHIPPED 2026-05-30.** Third Gold mart `mart_financial_health` materialized as Iceberg/Parquet in `financial_analytics_silver` — per-company annual ratios spanning income statement + balance sheet + cash flow statement, composite grain (cik, as_of_date, fiscal_year), 10,610 rows. 9 in-scope canonicals pivoted onto columns via MAX(CASE WHEN canonical=X THEN value END) + 8 NULLIF-guarded derived ratios (gross_margin, operating_margin, net_margin, return_on_assets, return_on_equity, debt_to_equity, operating_cf_margin, cash_to_assets). 17 dbt schema tests + 17 SQL structural verify checks (sql/verify/15) PASS. **Canonical seed expansion 8 → 13 raw us-gaap tags** (added OperatingIncomeLoss, GrossProfit, CostOfRevenue, CashAndCashEquivalentsAtCarryingValue, NetCashProvidedByUsedInOperatingActivities) drives the IS depth + BS cash + CF operating coverage; six hardcoded Jinja {% set concepts %} lists extended in lock-step across intermediate + 5 warehouse models. **New seed sp100_company_sector.csv** — 107 rows, GICS 11-sector taxonomy (S&P + MSCI 2023 reclassification), CIKs sourced authoritatively from SEC EDGAR company_tickers.json. **mart_peer_benchmark sector cascade (Option A bundle):** partition key extended from (as_of_date, fiscal_year, canonical_concept) to 4-key with +gics_sector; new sector_resolved CTE LEFT JOINs the seed with COALESCE('UNCATEGORIZED') for unmatched; row cardinality preserved at 29,936 (per-cik 1:1 sector); partition count went from 405 to 4,055. **Risk 49 banked** — Salesforce (cik 0001108524) FY2010-2013 gross_profit > revenue artifact (13 rows / 10,610 = 0.12%) from pre-ASC-606 revenue tagging mismatch where GrossProfit anchors to a multi-tag revenue base while sat_concept_value's value DESC collapse picks the largest single Revenues alias; verify check 15 documents + excludes the known (cik, fy) window. PBI smoke test PASS — Apple net_margin 2015-2025 trajectory analyst-correct (FY2023 25.3% matches Apple reported), Risk 45+47+48 cascade vindicated at the ratio surface. 10/10 ENGINEERING_STANDARDS audit PASS — NINTH consecutive code-shipping session (8/9/10/11/12/13/15/16/17 unbroken). GOLD_MARTS_PIPELINE.md extended (new sections 9 mart_financial_health walkthrough + 10 roadmap refreshed + 11 references renumbered) + DBT_PIPELINE.md new section 9.5 session 3 narrative. Cumulative verification surface: 121/121 dbt schema + 114/114 SQL structural verify on warehouse + BV preserved; +110 new schema tests at warehouse/BV layers from canonical seed expansion all PASS; marts surface = 63 dbt schema + 48 SQL structural verify across three active Gold marts; first-cascade dbt build PASS=231 / WARN=0 / ERROR=0. |
-| Next phase | **Phase 4 session 4.** Fourth Gold mart: mart_growth_forecast. scripts/forecast.py using statsmodels ARIMA / Holt-Winters per Risk 38 lock. Likely annual revenue forecasting with prediction intervals over the 10-year history per company. Mart-shape PBI smoke test repeats per Project #2 carry-forward. |
-| Last session closed | 2026-05-30 (Phase 4 session 3 — third Gold mart mart_financial_health SHIPPED + canonical seed expansion + sp100_company_sector seed + mart_peer_benchmark sector cascade Option A bundle + Risk 49 banked) |
-| Last bundled commit | 2026-05-30 — Phase 4 session 3 bundle (pending push at session close) |
+| Active phase | **Phase 4 session 4 SHIPPED 2026-05-30.** Fourth Gold mart `mart_growth_forecast` materialized as Iceberg/Parquet in `financial_analytics_silver` — per-company annual revenue trajectory unifying historical observed values (from mart_pl_trend) and forward-looking 3-year forecasts (from scripts/forecast.py). UNION-shaped composite grain (cik, canonical_concept, fiscal_year, as_of_date, row_kind), 10,069 rows = 9,775 historical + 294 forecast (98 companies × 3 forecast years; 1 single-observation entrant skipped). **scripts/forecast.py SHIPPED** — boto3 Athena → pandas → statsmodels.tsa Holt-Winters Exponential Smoothing (additive trend) per company + ARIMA(1,1,0) drift-walk fallback for short / non-trended series + 95% prediction intervals + pyarrow Parquet write to S3. Risk 38 lock fulfilled (statsmodels over Prophet on annual cadence). **Forecast architecture Option A** chosen at kickoff direction-check — Python writes Parquet to S3, dbt-athena consumes via sources entry + external table; clean compute/consumption separation, preserves dbt lineage. **Forecast Parquet at zone=silver/forecasts/** — matches the project's zone= S3 layout convention AND inherits phil-dbt's existing S3SilverReadWrite IAM scope (no policy attachment needed). **Triple-pinned forecast schema** across scripts/forecast.py FORECAST_SCHEMA + sql/ddl/03 column list + dbt sources columns block. **Risks 50 + 51 banked** — 50 = zone=silver/ S3 prefix + IAM scope forward-projection lesson (initial cut hit S3 PutObject AccessDenied on top-level forecasts/ prefix outside phil-dbt's scope); 51 = forecast schema triple-pin coordinated-drift contract. 21 dbt schema tests + 18 SQL structural verify checks (sql/verify/16) PASS. PBI smoke test PASS — Apple revenue FY2009 ~$42B → FY2024 ~$391B (matches Apple reported) + forecast 2026-2028 with 95% CI band rendered analyst-correct. MAX aggregation chosen over SUM (historical leg has 10 identical as_of_date snapshots per fiscal_year — SUM over-counts 10x) — documented as the analyst-facing aggregation convention for this mart. 10/10 ENGINEERING_STANDARDS audit PASS — TENTH consecutive code-shipping session (8/9/10/11/12/13/15/16/17/18 unbroken). GOLD_MARTS_PIPELINE.md extended (new section 10 = 6 subsections covering forecast architecture + scripts/forecast.py + DDL + mart walkthrough + verify + smoke test; section 11 roadmap refreshed; section 12 references renumbered) + DBT_PIPELINE.md new section 9.6. Cumulative verification surface: 121/121 dbt schema + 114/114 SQL structural verify on warehouse + BV preserved; marts surface = 84 dbt schema + 66 SQL structural verify across four active Gold marts; first-cascade dbt build PASS=161 / WARN=0 / ERROR=0. |
+| Next phase | **Phase 4 session 5 — Phase 4 CLOSE.** Phase-boundary structural audit (6/6) + Phase 4 reflection rolling Phase 4 Risks 38-51 into pattern families + README Status line refresh + Phase 5 PBI kickoff forward-verify. |
+| Last session closed | 2026-05-30 (Phase 4 session 4 — fourth Gold mart mart_growth_forecast SHIPPED + scripts/forecast.py + Option A forecast architecture + zone=silver/ prefix correction + Risks 50-51 banked + TENTH consecutive ENGINEERING_STANDARDS audit streak unbroken) |
+| Last bundled commit | 2026-05-30 — Phase 4 session 4 bundle (pending push at session close) |
 | Active blockers | None |
-| Open questions | scripts/forecast.py statsmodels model selection (ARIMA vs Holt-Winters vs SARIMA) → Phase 4 session 4 design pass. Phase 6 CI/CD forward-verify still deferred to Phase 5 close. Per-company tag-preference override at sat_concept_value (Risk 49 targeted fix) → deferred enhancement, narrow benefit. |
+| Open questions | Phase 6 CI/CD forward-verify still deferred to Phase 5 close. Per-company tag-preference override at sat_concept_value (Risk 49 targeted fix) → deferred enhancement, narrow benefit. Forecast canonical expansion to net_income / operating_income → future targeted forecast-extension session (script + partition extension, no mart-SQL change required). |
 
 ---
 
@@ -88,6 +88,76 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-05-30 — Phase 4 session 4 — fourth Gold mart mart_growth_forecast SHIPPED + scripts/forecast.py (statsmodels Holt-Winters + ARIMA fallback) + Option A forecast architecture (Parquet to S3 + dbt sources) + zone=silver/ S3 prefix correction + Risks 50-51 banked + TENTH-session ENGINEERING_STANDARDS audit streak unbroken
+
+**Goal.** Fourth Phase 4 mart end-to-end: design forecast architecture at kickoff (one-question direction-check); pin statsmodels in requirements; author scripts/forecast.py + sql/ddl/03 + dbt sources entry + mart_growth_forecast.sql + schema YAML extension + verify/16; cascade rebuild; mart-shape PBI smoke test; extend GOLD_MARTS_PIPELINE.md + DBT_PIPELINE.md; bundled commit. 14-step session order locked at kickoff after one-question direction-check on forecast architecture (Option A bundled — Parquet to S3 + dbt sources).
+
+**Forecast architecture Option A locked at session step 1.** Three options evaluated at the kickoff direction-check: (A) Python writes Parquet to S3 + dbt-athena consumes via sources entry + external table, (B) Python writes to a Bronze staging table + dbt collapses, (C) Python writes the mart directly via Athena CTAS. Option A chosen — clean compute/consumption separation, preserves dbt lineage/docs/schema-test surface for the mart, no extra Bronze hop.
+
+**requirements.txt at session step 2.** statsmodels>=0.14 + pandas>=2.0 + pyarrow>=14.0 pinned with verbose section comments (Risk 38 provenance + pure-Python install footprint + Holt-Winters/ARIMA model selection).
+
+**scripts/forecast.py at session step 3.** boto3 + numpy + pandas + pyarrow + dotenv + statsmodels.tsa.holtwinters.ExponentialSmoothing + statsmodels.tsa.arima.ARIMA. Reads mart_pl_trend revenue surface at the latest as_of_date via Athena. Per-company iteration: Holt-Winters Exponential Smoothing (additive trend) primary, ARIMA(1,1,0) drift-walk fallback for fewer than 4 observations OR where Holt-Winters fit raises, skipped for fewer than 2 observations. 3-year forecast horizon at 95% prediction intervals. Pyarrow writes the result as Parquet to S3. FORECAST_SCHEMA pyarrow schema pin documents the cross-artefact type contract.
+
+**sql/ddl/03_create_forecast_external_table.sql at session step 4.** Registers the forecast Parquet surface as an Athena/Glue Catalog external table. Partitioned by (canonical_concept, as_of_date) with partition projection (type=enum + type=date). Schema in financial_analytics_silver. LOCATION under zone=silver/forecasts/ (corrected mid-session — see Risk 50 below).
+
+**dbt/models/marts/_sources.yml at session step 5.** New sources YAML — registers the forecast source with the forecast_surface external table for {{ source('forecast', 'forecast_surface') }} consumption from the mart SQL. Column list pinned to match the Python writer + the DDL byte-for-byte (Risk 51 triple-pin).
+
+**mart_growth_forecast.sql at session step 6.** UNION-shaped — different from the prior 3 marts which all used 5-step BV+RV equi-join chains. 5 CTEs: historical (reuses mart_pl_trend revenue rows) → forecast_raw (latest as_of_date partition from forecast_surface) → forecast_enriched (LEFT JOIN hub_company → INNER JOIN sat_company_metadata for entity_name) → unioned (UNION ALL, no dedup needed thanks to row_kind discriminator) → hashed (SHA-256 5-component composite PK + final shape). Composite grain (cik, canonical_concept, fiscal_year, as_of_date, row_kind).
+
+**Cascade rebuild at session step 8.** `dbt build --select +mart_growth_forecast` PASS=161 / WARN=0 / ERROR=0 / SKIP=0 / NO-OP=0. Known dbt 1.10 DeprecationsSummary — 54 occurrences of MissingArgumentsPropertyInGenericTestDeprecation across schema YAMLs — informational only, locked by Risk 30 (Glue Python Shell Python 3.9 ceiling pins dbt-core to 1.10.x).
+
+**Athena Console verify at session step 8.** sql/verify/16 18/18 PASS at first run after the cascade landed (phil-admin, wg_financial_analytics, us-east-1). Total rows 10,069 = 9,775 historical + 294 forecast (98 companies × 3 forecast years; 1 single-observation entrant skipped at the script level).
+
+**Mart-shape PBI Desktop smoke test at session step 9.** Generic ODBC connector path (dsn=FinancialAnalyticsAthena + Advanced options SQL statement). Line chart on fiscal_year × MAX of value_numeric / forecast_value / lower_ci_95 / upper_ci_95. Apple FY2009 ~$42B → FY2024 ~$391B (matches Apple reported) + forecast 2026-2028 trending upward with 95% CI band visible (orange lower / blue point / purple upper). Saved as powerbi/04_smoke_test_phase_4_session_4.pbix. MAX aggregation chosen over SUM — the historical leg has 10 identical as_of_date snapshots per fiscal_year (no restatements yet at single Bronze extract), SUM would over-count 10x. Documented as the mart's analyst-facing aggregation convention.
+
+**Verification surface at session 4 close.** Cumulative marts surface = 84 dbt schema tests + 66 SQL structural verify checks across 4 active Gold marts (mart_pl_trend 20+14; mart_peer_benchmark 28+17; mart_financial_health 17+17; mart_growth_forecast 21+18). Phase 2 cumulative 121/121 dbt schema + 114/114 SQL structural verify on warehouse + business_vault preserved. 10/10 ENGINEERING_STANDARDS audit PASS on the session 4 code surface. TENTH consecutive code-shipping session — 8/9/10/11/12/13/15/16/17/18 unbroken; session 14 phase-boundary, no code.
+
+**What landed.**
+
+- **requirements.txt** — statsmodels>=0.14 + pandas>=2.0 + pyarrow>=14.0 with verbose section comments.
+- **scripts/forecast.py** — NEW per-company Holt-Winters + ARIMA fallback forecast pipeline.
+- **sql/ddl/03_create_forecast_external_table.sql** — NEW external Parquet table registering the forecast surface.
+- **dbt/models/marts/_sources.yml** — NEW marts-layer source declarations for the forecast surface.
+- **dbt/models/marts/mart_growth_forecast.sql** — NEW fourth Gold mart, 5 CTEs.
+- **dbt/models/marts/_models.yml** — extended with mart_growth_forecast entry (1 unique_combination + 21 column-level tests).
+- **sql/verify/16_phase4_marts_growth_forecast_verification.sql** — NEW 18 PASS/FAIL CTE structural checks.
+- **GOLD_MARTS_PIPELINE.md** — new section 10 with 6 subsections; section 11 roadmap refreshed; section 12 references renumbered.
+- **DBT_PIPELINE.md** — new section 9.6 covering Option A forecast architecture + scripts/forecast.py + zone=silver/ prefix + triple-pinned schema.
+- **PROJECT_CONTEXT.md** — current status table updated; session 18 log entry (this entry) appended.
+- **PROJECT_PLAN.md section 9** — Phase 4 row refreshed (sessions 1-4 SHIPPED, session 5 pending).
+- **README.md Status line refreshed** — Phase 4 session 4 SHIPPED wording + Risks 50-51 banked.
+- **powerbi/04_smoke_test_phase_4_session_4.pbix** — smoke test artefact saved.
+- **LEARNINGS.md** — Risks 50 + 51 banked.
+
+**Decisions locked this session.**
+
+- **Forecast architecture = Option A** (Parquet to S3 + dbt sources). Senior-DE professional choice — clean compute/consumption separation, preserves dbt lineage/docs/schema-test surface.
+- **statsmodels model selection = Holt-Winters Exponential Smoothing (additive trend) primary + ARIMA(1,1,0) drift-walk fallback.** Per Risk 38 lock at Phase 3 session 14 forward-verify. 95% prediction intervals (analyst-conventional).
+- **Forecast horizon = 3 years.** Analyst-conventional 3-year out view; PBI consumers can filter further. Future expansion to 5 years deferred — narrow benefit, model uncertainty widens with horizon step.
+- **Forecast canonical = revenue only for session 4.** Forward-compatible expansion (net_income / operating_income) is a script + partition extension that doesn't require a mart-SQL change. Deferred to a future targeted forecast-extension session.
+- **Forecast Parquet S3 prefix = zone=silver/forecasts/** (not top-level forecasts/). Inherits the existing phil-dbt S3SilverReadWrite IAM scope and matches the project's zone= S3 layout convention. Banked as Risk 50.
+- **Forecast schema pinned in three places** (Python FORECAST_SCHEMA + DDL column list + dbt sources YAML). Coordinated-drift contract documented inline in all three artefacts. Banked as Risk 51.
+- **MAX aggregation convention for the mart in PBI** — the historical leg has 10 identical as_of_date snapshots per fiscal_year; SUM would over-count 10x. Documented in GOLD_MARTS_PIPELINE.md section 10.4 as the analyst-facing aggregation convention for this mart.
+
+**Blockers / surprises.** Four surprises mid-session, all resolved within the session:
+
+1. **Athena Console rejected DROP + CREATE as a single batch.** Athena Console limits one SQL statement per Run — documented in sql/ddl/02 header. Recovered by splitting into two separate Run actions.
+2. **boto3 missing in .venv.** Initial `python scripts/forecast.py` invocation hit ModuleNotFoundError. Recovered via `pip install -r requirements.txt` into the active venv (Phil's `.venv` is distinct from the earlier `dbt_venv` referenced in TEACHING_PREFERENCES.md — install fresh into the current venv).
+3. **pyarrow strict type-cast — cik int64 → string rejection.** pandas.read_csv auto-inferred cik from the Athena result CSV as int64 (stripped leading zeros). FORECAST_SCHEMA pins cik as string → pyarrow.lib.ArrowTypeError. Recovered by passing dtype={"cik": str} to pd.read_csv + defensive .str.zfill(10). Three further pyarrow type-safety risks fixed defensively in the same edit pass: int32 narrowing explicit cast, microsecond timestamp floor, np.asarray on statsmodels forecast outputs (avoids Series-index alignment surprises at the DataFrame constructor).
+4. **S3 PutObject AccessDenied on the forecast Parquet.** First-cut DDL + Python script targeted top-level `forecasts/` S3 prefix — outside phil-dbt's S3SilverReadWrite IAM scope which is restricted to `zone=silver/*`. Banked as Risk 50. Recovered by relocating to `zone=silver/forecasts/` (single S3 prefix change in both the DDL + the Python script), re-creating the external table via DROP + CREATE in Athena Console, re-running the script. Inherits the existing IAM scope; no policy attachment needed.
+
+**NOT in this session — deferred.**
+
+- **Phase 4 CLOSE (structural audit + phase reflection)** → Phase 4 session 5.
+- **Forecast canonical expansion to net_income / operating_income** → future targeted forecast-extension session (script + partition extension, no mart-SQL change).
+- **Per-company tag-preference override at sat_concept_value (Risk 49 targeted fix)** → deferred enhancement, narrow benefit.
+- **In-session teaching layer** — deferred per locked build-mode preference.
+- **Phase 6 CI/CD forward-verify** → Phase 5 close.
+
+**Next session.** Phase 4 session 5 — Phase 4 CLOSE. Phase-boundary structural audit (6/6) + Phase 4 reflection rolling Phase 4 Risks 38-51 into pattern families + README Status line refresh + Phase 5 PBI kickoff forward-verify.
+
+---
 
 ### 2026-05-30 — Phase 4 session 3 — third Gold mart mart_financial_health SHIPPED + canonical seed expansion 8→13 us-gaap tags + sp100_company_sector seed + mart_peer_benchmark sector cascade (Option A bundle) + Risk 49 Salesforce pre-ASC-606 artifact banked + NINTH-session ENGINEERING_STANDARDS audit streak unbroken
 

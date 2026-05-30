@@ -658,23 +658,219 @@ revenue base. Saved as `powerbi/03_smoke_test_phase_4_session_3.pbix`.
 
 ---
 
-## 10. Phase 4 roadmap
+## 10. Phase 4 session 4 deliverables
+
+Fourth Gold mart — `mart_growth_forecast`. Per-company annual revenue
+trajectory unifying historical observed values (from `mart_pl_trend`) and
+forward-looking 3-year forecasts (from `scripts/forecast.py` via the
+`forecast_surface` external table). UNION-shaped — different from the
+prior three marts which all used 5-step BV+RV equi-join chains. Risk 38
+locked at Phase 3 session 14 forward-verify (statsmodels over Prophet on
+annual cadence + AWS Free Tier deploy footprint).
+
+### 10.1 Forecast architecture (Option A — Parquet to S3 + dbt sources)
+
+statsmodels runs in Python, not SQL. The compute layer is Python;
+the consumption layer is dbt-athena. At the Phase 4 session 4 kickoff
+direction-check, three architectures were evaluated:
+
+- **Option A — Parquet to S3 + dbt sources** (chosen). Python writes
+  Parquet directly to `s3://<bucket>/zone=silver/forecasts/...`;
+  dbt-athena consumes via a sources entry + external table reference.
+  Clean compute / consumption separation. mart is a thin dbt model
+  UNION-ing the historical `mart_pl_trend` revenue rows with the
+  forecast surface.
+- Option B — Python to Bronze staging then dbt collapses. Adds a Bronze
+  hop that buys nothing — the Python script already produces clean
+  analyst-ready forecast rows.
+- Option C — Python writes the mart directly via Athena CTAS. Breaks
+  the dbt lineage / docs / schema-test surface for the mart, regression
+  on the consumption-pattern contract (ENGINEERING_STANDARDS criterion 7).
+
+**zone=silver/ S3 prefix.** The forecast Parquet lands under
+`zone=silver/forecasts/canonical_concept=<c>/as_of_date=<YYYY-MM-DD>/`
+— matches the project's zone= S3 layout convention (zone=bronze/ raw,
+zone=silver/ dbt-managed + this forecast surface, zone=gold/ reserved)
+AND inherits the existing phil-dbt `S3SilverReadWrite` IAM scope so no
+policy attachment is needed for the Python writer. Initial first cut
+landed under top-level `forecasts/` and hit `S3 PutObject AccessDenied`
+because phil-dbt's IAM policy scopes writes to `zone=silver/*` only.
+Banked as Risk 50 — forward-projection lesson on S3 prefix convention +
+IAM scope at design time, not debug time.
+
+**Schema pinned in three places.** The forecast Parquet schema is
+declared in three coordinated artefacts: `scripts/forecast.py`
+`FORECAST_SCHEMA` pyarrow schema pin, `sql/ddl/03_create_forecast_external_table.sql`
+CREATE EXTERNAL TABLE column list, and `dbt/models/marts/_sources.yml`
+columns block. Schema drift between any two surfaces as a Parquet
+column-mismatch error at first dbt build — coordinated changes across
+all three at every schema bump. Banked as Risk 51.
+
+### 10.2 scripts/forecast.py walkthrough
+
+Pipeline orchestrator. Reads the post-cascade `mart_pl_trend` revenue
+surface from Athena at the latest as_of_date, fits a per-company
+Holt-Winters Exponential Smoothing model with additive trend over the
+available fiscal-year history, projects 3 years forward at 95%
+prediction intervals, writes Parquet to S3. Companies with fewer than
+4 observations or where the Holt-Winters fit raises fall back to
+ARIMA(1,1,0); companies with fewer than 2 observations are skipped.
+
+Model selection rationale:
+
+- **Holt-Winters Exponential Smoothing (additive trend)** — primary.
+  Fits annual revenue cleanly when there's enough signal + a
+  non-degenerate trend. statsmodels' `ExponentialSmoothing` with
+  `trend="add"` + `seasonal=None` (annual cadence has no seasonal
+  cycle to model).
+- **ARIMA(1,1,0)** — fallback. Drift walk with one autoregressive lag.
+  Fits even short / flat series; less analyst-credible at horizon
+  but keeps per-company coverage complete.
+- **Skipped — fewer than 2 observations.** Insufficient signal for any
+  forecast.
+
+Output structure pinned by `FORECAST_SCHEMA` pyarrow schema:
+
+| Column | Type | Description |
+|---|---|---|
+| cik | string | 10-digit zero-padded |
+| forecast_year | int32 | latest_historical_year + 1, +2, +3 |
+| forecast_value | float64 | Point forecast in USD |
+| lower_ci_95 / upper_ci_95 | float64 | 95% prediction interval bounds |
+| model_name | string | 'holt_winters_additive' or 'arima_1_1_0' |
+| model_aic | float64 | AIC of the fit |
+| historical_obs_count | int32 | Observations the model was fit on |
+| latest_historical_year | int32 | Anchor year |
+| load_datetime | timestamp[us, UTC] | Run timestamp (microsecond) |
+| record_source | string | 'script.forecast.py' |
+
+Type-safety gotchas the live run surfaced + fixed:
+
+- **cik must be read as string at CSV time.** pandas auto-infers cik
+  from the Athena result CSV as int64 (strips leading zeros). Pinned
+  via `dtype={"cik": str}` on `pd.read_csv` + defensive `.str.zfill(10)`
+  on the resulting Series.
+- **int columns explicitly cast to int32.** pyarrow's
+  `pa.Table.from_pandas(schema=...)` enforces strict type-match — int64
+  → int32 narrowing can raise even on safe-cast values. Explicit
+  pandas-side `.astype("int32")` before the pyarrow conversion sidesteps.
+- **load_datetime floored to microsecond.** `pd.Timestamp.now(tz="UTC")`
+  carries nanosecond precision; the schema's `timestamp[us, UTC]` target
+  rejects ns→us truncation under safe-cast. `.floor("us")` at source
+  keeps the safe cast valid.
+- **statsmodels forecast outputs forced to ndarray via `np.asarray`.**
+  Holt-Winters / ARIMA forecast results are pandas Series with their own
+  index — when fed to a DataFrame constructor alongside Python lists,
+  pandas can re-align by Series index instead of positionally. Forcing
+  ndarray collapses the alignment to position-only.
+
+### 10.3 sql/ddl/03_create_forecast_external_table.sql walkthrough
+
+Registers the forecast Parquet surface as an Athena/Glue Catalog external
+table. Partitioned by `(canonical_concept, as_of_date)` with partition
+projection — `canonical_concept` type=enum (single value 'revenue' for
+session 4, forward-compatible expansion adds entries), `as_of_date`
+type=date with range from `2026-05-30` to `NOW`. Both `type=enum +
+type=date` avoid the Bronze cik `type=injected` pitfall (LEARNINGS
+Phase 2 session 3) — dbt builds against this table scan without
+partition filters and partition projection still resolves.
+
+Schema in `financial_analytics_silver` (not `_bronze`) because the
+forecast surface is compute output, not external raw data — Bronze is
+the immutable system-of-record snapshot per demo-durability principle 1.
+Silver is the consumption-side schema; the forecast table lives
+alongside the marts it feeds.
+
+### 10.4 mart_growth_forecast walkthrough
+
+Composite grain `(cik, canonical_concept, fiscal_year, as_of_date,
+row_kind)` — `row_kind` is the analyst-facing discriminator between
+'historical' and 'forecast' rows. `fiscal_year` unifies the historical
+year (from `mart_pl_trend`) and `forecast_year` (from
+`forecast_surface`) under one column name so PBI's time-axis grouping
+works without a derived column.
+
+CTE chain (5 stages):
+
+1. **historical** — reuse `mart_pl_trend`'s already-cleaned revenue rows
+   directly. No re-derivation of the BV + RV equi-join chain — that
+   chain already ran in `mart_pl_trend` and applied every Risk
+   42/45/47/48 fix. row_kind = 'historical', forecast columns NULL.
+2. **forecast_raw** — read from `{{ source('forecast', 'forecast_surface') }}`.
+   Filter to canonical_concept = 'revenue' + as_of_date = MAX(as_of_date)
+   (latest forecast run only — earlier runs remain on S3 for audit).
+3. **forecast_enriched** — attach entity_name via LEFT JOIN through
+   hub_company → sat_company_metadata. forecast_surface has no
+   entity_name column by design.
+4. **unioned** — UNION ALL historical + forecast_enriched. No dedup
+   needed — row_kind discriminator + forecast_year > latest historical
+   fiscal_year per company guarantee collision-free composite grain.
+5. **hashed** — SHA-256 surrogate PK over 5-component composite +
+   final shape + load_datetime + record_source.
+
+Materialization = plain Iceberg table per marts layer defaults.
+Consumed transparently by Power BI through the Athena ODBC v2 driver.
+
+PBI consumer patterns:
+
+- **Single trend line.** `COALESCE(value_numeric, forecast_value)` —
+  historical + forecast rendered as one continuous line.
+- **Separate historical / forecast.** Use `row_kind` as Legend; PBI
+  colours historical and forecast distinctly. CI band rendered as
+  shaded area on the forecast leg only.
+- **Aggregation.** Historical leg has 10 as_of_date snapshots per
+  fiscal_year with identical values (no restatements yet — single
+  Bronze extract); use MAX or AVG aggregation, NOT SUM (which over-counts
+  10x). Future restatement history would surface as differing values
+  per as_of_date and the PBI consumer would filter on as_of_date.
+
+### 10.5 Verification surface at session 4 close
+
+`sql/verify/16_phase4_marts_growth_forecast_verification.sql` —
+18 PASS/FAIL CTE structural checks. Cumulative marts surface = 84 dbt
+schema tests + 66 SQL structural verify checks across four active Gold
+marts (mart_pl_trend 20+14; mart_peer_benchmark 28+17;
+mart_financial_health 17+17; mart_growth_forecast 21+18).
+First-cascade dbt build: PASS=161 / WARN=0 / ERROR=0.
+
+### 10.6 PBI smoke test session 4
+
+Apple revenue historical + forecast overlay (Power BI Desktop generic
+ODBC connector path, `dsn=FinancialAnalyticsAthena` connection string +
+Advanced options SQL statement filtering to cik 0000320193 +
+canonical_concept = 'revenue'). Line chart on fiscal_year × MAX of
+value_numeric / forecast_value / lower_ci_95 / upper_ci_95.
+
+Apple FY2009 ~$42B → FY2024 ~$391B (matches Apple reported); forecast
+2026-2028 tracks upward from ~$0.42T point estimate with the 95% CI
+band rendering as a widening fan. Saved as
+`powerbi/04_smoke_test_phase_4_session_4.pbix`.
+
+MAX aggregation chosen over SUM because the historical leg carries 10
+as_of_date snapshots per fiscal_year with identical values — SUM
+over-counts 10x. Forecast leg has 1 row per forecast_year so MAX = the
+value. This is the analyst-facing aggregation convention for the mart
+documented in section 10.4 above.
+
+---
+
+## 11. Phase 4 roadmap
 
 | Session | Deliverable | Status |
 |---|---|---|
 | 4.1 | mart_pl_trend + ODBC/DSN prerequisite + smoke test pattern + this doc | SHIPPED 2026-05-30 |
 | 4.2 | mart_peer_benchmark + Risk 45 v2 / Risk 47 / Risk 48 cascade | SHIPPED 2026-05-30 |
 | 4.3 | mart_financial_health + canonical seed expansion + sp100_company_sector seed + mart_peer_benchmark sector cascade (Option A bundle) + Risk 49 | SHIPPED 2026-05-30 |
-| 4.4 | mart_growth_forecast + scripts/forecast.py (statsmodels ARIMA / Holt-Winters) | pending |
+| 4.4 | mart_growth_forecast + scripts/forecast.py (statsmodels Holt-Winters + ARIMA fallback) + Option A forecast architecture + Risks 50-51 | SHIPPED 2026-05-30 |
 | 4.5 | Phase 4 CLOSE — structural audit + reflection rolling Phase 4 Risks into pattern families | pending |
 
 statsmodels-over-Prophet lock at Phase 3 session 14 forward-verify
-(Risk 38). Annual cadence + Apple/Stan compile footprint considerations
+(Risk 38). Annual cadence + Stan C++ compile footprint considerations
 documented in LEARNINGS.md Phase 4 forward-verify subsection.
 
 ---
 
-## 11. References
+## 12. References
 
 - Project conventions: [TEACHING_PREFERENCES.md](TEACHING_PREFERENCES.md),
   [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md),

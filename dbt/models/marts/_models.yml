@@ -598,3 +598,165 @@ models:
           - not_null
           - accepted_values:
               values: ['mart.mart_financial_health']
+
+  - name: mart_growth_forecast
+    description: |
+      Gold-layer Growth & Forecast mart. Per-company annual revenue
+      trajectory unifying historical observed values (from mart_pl_trend)
+      and 3-year forward-looking forecasts (from scripts/forecast.py via
+      the forecast_surface external table). Composite natural PK
+      (cik, canonical_concept, fiscal_year, as_of_date, row_kind) — the
+      row_kind discriminator ('historical' vs 'forecast') is the
+      analyst-facing column that PBI consumers filter / colour by.
+      Forecast architecture = Option A (Phase 4 session 4 direction-check,
+      2026-05-30): scripts/forecast.py runs statsmodels.tsa Holt-Winters
+      Exponential Smoothing (additive trend) per company with ARIMA(1,1,0)
+      drift-walk fallback for short / non-trended series. 3-year horizon,
+      95% prediction intervals. forecast_value / lower_ci_95 / upper_ci_95
+      / model_name / model_aic populated on the forecast leg, NULL on the
+      historical leg; value_numeric populated on the historical leg, NULL
+      on the forecast leg. Risk 38 lock (statsmodels over Prophet,
+      Phase 3 session 14 forward-verify). JOIN topology: UNION ALL over
+      (a) mart_pl_trend filtered to revenue + (b) forecast_surface filtered
+      to the latest as_of_date partition LEFT JOIN hub_company INNER JOIN
+      sat_company_metadata. Materialized as Iceberg table per marts layer
+      defaults. Walkthrough: GOLD_MARTS_PIPELINE.md section 10 +
+      DBT_PIPELINE.md section 9.6.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - cik
+            - canonical_concept
+            - fiscal_year
+            - as_of_date
+            - row_kind
+    columns:
+      - name: mart_growth_forecast_hk
+        description: |
+          SHA-256 hash of (cik || '||' || canonical_concept || '||' ||
+          fiscal_year || '||' || as_of_date || '||' || row_kind),
+          hex-encoded. Single-column surrogate primary key matching the
+          project's hash-chain convention.
+        tests:
+          - not_null
+          - unique
+
+      - name: cik
+        description: |
+          10-digit zero-padded SEC Central Index Key. FK into hub_company.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('hub_company')
+              field: cik
+
+      - name: entity_name
+        description: |
+          Company entity name (e.g., "Apple Inc."). Sourced via INNER JOIN
+          to sat_company_metadata on hub_company_hk on the forecast leg;
+          inherited from mart_pl_trend on the historical leg.
+        tests:
+          - not_null
+
+      - name: as_of_date
+        description: |
+          Snapshot date (DATE). Historical leg carries the fiscal year-end
+          as_of_date from mart_pl_trend. Forecast leg carries the date of
+          the most recent forecast run (date.today() at scripts/forecast.py
+          execution). FK into dim_as_of_dates ONLY on the historical leg —
+          forecast leg's as_of_date is a run-date, not a financial snapshot
+          date, so no FK relationships test enforced at the mart level.
+        tests:
+          - not_null
+
+      - name: fiscal_year
+        description: |
+          Unified historical_year + forecast_year column (INTEGER). Historical
+          leg carries the observed fiscal year from mart_pl_trend; forecast
+          leg carries forecast_year = latest_historical_year + 1, +2, +3.
+        tests:
+          - not_null
+
+      - name: canonical_concept
+        description: |
+          Canonical concept name (varchar). Single value 'revenue' for
+          Phase 4 session 4. Future expansion to net_income /
+          operating_income is a script + partition extension that doesn't
+          require a mart-SQL change.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['revenue']
+          - relationships:
+              to: ref('hub_concept')
+              field: canonical_concept
+
+      - name: row_kind
+        description: |
+          Discriminator between historical and forecast rows. Either
+          'historical' (mart_pl_trend) or 'forecast' (forecast_surface).
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['historical', 'forecast']
+
+      - name: value_numeric
+        description: |
+          Observed historical revenue value (DECIMAL(28,2)). Populated on
+          the historical leg; NULL on the forecast leg.
+
+      - name: forecast_value
+        description: |
+          Point forecast value in USD (DOUBLE). Populated on the forecast
+          leg via Holt-Winters or ARIMA depending on model_name; NULL on
+          the historical leg.
+
+      - name: lower_ci_95
+        description: |
+          Lower bound of the 95% prediction interval (DOUBLE). Populated
+          on the forecast leg; NULL on the historical leg.
+
+      - name: upper_ci_95
+        description: |
+          Upper bound of the 95% prediction interval (DOUBLE). Populated
+          on the forecast leg; NULL on the historical leg.
+
+      - name: model_name
+        description: |
+          'holt_winters_additive' (default) or 'arima_1_1_0' (fallback for
+          fewer than 4 observations OR where Holt-Winters fit raised).
+          NULL on the historical leg.
+        tests:
+          - accepted_values:
+              values: ['holt_winters_additive', 'arima_1_1_0']
+
+      - name: model_aic
+        description: |
+          Akaike Information Criterion of the fitted model (DOUBLE) —
+          lower = better fit relative to model complexity. Surfaces in PBI
+          as a model-quality filter. NULL on the historical leg.
+
+      - name: historical_obs_count
+        description: |
+          Number of fiscal-year observations the forecast model was fit on
+          (INTEGER). Typically 8-11 per company across the 10-year history.
+          NULL on the historical leg.
+
+      - name: latest_historical_year
+        description: |
+          The most recent fiscal year in the company's history — the anchor
+          immediately before forecast_year. NULL on the historical leg.
+
+      - name: load_datetime
+        description: |
+          UTC timestamp(6) — when this mart row was materialized.
+        tests:
+          - not_null
+
+      - name: record_source
+        description: |
+          Constant 'mart.mart_growth_forecast'.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['mart.mart_growth_forecast']
