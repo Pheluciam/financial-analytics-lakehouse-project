@@ -169,6 +169,10 @@ The Athena task's QueryString is inlined directly in the ASL: `SELECT COUNT(*) A
 
 Session 13 expands the verify side to a Parallel state running all 10 `sql/verify/03-12` queries — same shape, ten siblings.
 
+**Phase 4 session 5 extension (2026-05-30):** Parallel state extended from 10 to 14 branches, fanning out across all `sql/verify/03-16` queries — 10 warehouse + business_vault branches (Phase 2 surface) plus 4 marts branches (Phase 4 surface — `VerifyMartPlTrend`, `VerifyMartPeerBenchmark`, `VerifyMartFinancialHealth`, `VerifyMartGrowthForecast`). Each new branch follows the existing ASL pattern (Athena `startQueryExecution.sync` against `wg_financial_analytics` workgroup + `awsdatacatalog`/`financial_analytics_silver` execution context). State machine definition size 110 KB (well under the 1 MiB ASL definition cap). IAM scope sanity-checked at session 5 — `financial-analytics-stepfunctions-runtime` role's existing `GlueCatalogReadForAthenaVerify` wildcard on `table/financial_analytics_silver/*` already covers the 4 mart tables plus the `forecast_surface` external table; no IAM policy patch needed for the extension. Deploy via the new `scripts/deploy_state_machine.py` helper (boto3 `stepfunctions.update_state_machine` from `.env` phil-admin keys; companion to `scripts/sync_phase3_artifacts_to_s3.py` which handles dbt project + Glue wrapper deploys).
+
+**`forecast.py` orchestration call (Phase 4 session 5 direction-check): Option A — keep manual, NOT in DAG.** `scripts/forecast.py` runs at annual cadence on demand; doesn't fit the per-run dbt rhythm the state machine orchestrates. Production-shape forecast orchestration deferred to Phase 6 stretch concern. Phase 4 CLOSE scope = validate everything that IS orchestrated runs green, not expand the orchestration surface.
+
 ## 4. End-to-end execution
 
 First orchestrated run (Phase 3 session 12 close, 2026-05-29):
