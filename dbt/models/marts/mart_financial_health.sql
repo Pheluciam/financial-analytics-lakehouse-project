@@ -128,6 +128,20 @@
 
 WITH bridge_fy AS (
     -- Bridge spine narrowed to annual (10-K-equivalent) snapshots.
+    --
+    -- Risk 66 (Phase 5 session 4.5 Fix-amendment, 2026-06-01) — original
+    -- `fiscal_period = 'FY'` predicate rejects sat rows where SEC EDGAR
+    -- companyfacts JSON omits the fp attribute on legitimate annual facts.
+    -- Step M re-audit confirmed BKNG/CAT/MA (and likely additional CIKs
+    -- across gross_profit, stockholders_equity, operating_cash_flow, and
+    -- operating_income canonicals) carry their FY annual NetIncomeLoss row
+    -- with fiscal_period IS NULL — the bare bridge_fy filter dropped them
+    -- before the Risk 58 mart-side period-end re-anchor could land them at
+    -- the correct fiscal_year. Relaxed to accept (fp = 'FY' OR fp IS NULL).
+    -- Risk 48 conditional span filter at sat_resolved (lines 204-211)
+    -- continues to reject quarterly IS rows; Q-period BS rows arrive with
+    -- fp populated (Q1/Q2/Q3) per SEC convention so the NULL branch does
+    -- not leak mid-year BS values for the BS-canonical block.
     SELECT
         b.hub_company_hk,
         b.link_filing_concept_period_hk,
@@ -135,7 +149,7 @@ WITH bridge_fy AS (
         b.fiscal_year,
         b.period_end_date
     FROM {{ ref('bridge_company_concept_period') }} b
-    WHERE b.fiscal_period = 'FY'
+    WHERE b.fiscal_period = 'FY' OR b.fiscal_period IS NULL
 ),
 
 pit_resolved AS (

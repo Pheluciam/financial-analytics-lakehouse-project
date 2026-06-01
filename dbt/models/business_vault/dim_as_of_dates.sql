@@ -11,6 +11,18 @@
 -- mart-time grain for Phase 4's mart_pl_trend (annual P&L over 10 years)
 -- and mart_peer_benchmark (annual peer comparison) consumption.
 --
+-- Risk 67 forward-snapshot extension (Phase 5 session 4.5 Fix-amendment,
+-- 2026-06-01). Added a forward snapshot 2026-06-01 so the bridge
+-- `filed_date <= as_of_date` visibility gate accepts FY2025 10-K filings
+-- (filed Q1/Q2 2026) carrying FY2024 comparatives. Heals SPGI total
+-- FY2024 absence (which has no standalone FY2024 10-K — only FY2025 10-K
+-- comparative coverage) and SO/TMO/CCI/PNC/AMT FY2024 net_income (whose
+-- FY2025 10-K comparatives became the primary source post-restatement).
+-- Cardinality grows 10 → 11 rows; PIT/Bridge scan cost rises ~10% — well
+-- inside the cardinality lock's design envelope. The new snapshot is the
+-- "current as_of_date" — every CIK's most-recent filing visible at the
+-- 2026-06-01 horizon.
+--
 -- Temporal anchor note (LEARNINGS Risk 23, 2026-05-29). These dates are
 -- consumed by pit_link_filing_concept_period and bridge_company_concept_period
 -- against the SEC filing's filed_date (from sat_filing_metadata) — NOT
@@ -37,7 +49,8 @@ WITH year_ends AS (
         (DATE '2022-12-31'),
         (DATE '2023-12-31'),
         (DATE '2024-12-31'),
-        (DATE '2025-12-31')
+        (DATE '2025-12-31'),
+        (DATE '2026-06-01')
     ) AS t(as_of_date)
 )
 

@@ -129,6 +129,14 @@ WITH bridge_fy AS (
     -- here rather than at the outer SELECT so downstream CTEs scan
     -- ~1/5 of the bridge row count. fiscal_period = 'FY' is the
     -- analyst-conventional annual P&L filter.
+    --
+    -- Risk 66 (Phase 5 session 4.5 Fix-amendment, 2026-06-01) — relaxed
+    -- to also accept rows where SEC EDGAR companyfacts JSON omits the fp
+    -- attribute on annual facts (observed for BKNG/CAT/MA NetIncomeLoss
+    -- 10-K rows during Step M re-audit drilldown A4.2). Quarterly rows
+    -- arrive with fp populated (Q1/Q2/Q3) so the NULL branch only adds
+    -- legitimate annual rows; the downstream Risk 48 span filter at
+    -- sat_resolved rejects any quarterly cumulatives whose span < 350 days.
     SELECT
         b.hub_company_hk,
         b.link_filing_concept_period_hk,
@@ -136,7 +144,7 @@ WITH bridge_fy AS (
         b.fiscal_year,
         b.period_end_date
     FROM {{ ref('bridge_company_concept_period') }} b
-    WHERE b.fiscal_period = 'FY'
+    WHERE b.fiscal_period = 'FY' OR b.fiscal_period IS NULL
 ),
 
 pit_resolved AS (

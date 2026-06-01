@@ -127,6 +127,13 @@ WITH bridge_fy AS (
     -- Bridge spine narrowed to annual (10-K-equivalent) snapshots.
     -- Same FY pre-filter as mart_pl_trend so downstream CTEs scan
     -- ~1/5 of bridge cardinality.
+    --
+    -- Risk 66 (Phase 5 session 4.5 Fix-amendment, 2026-06-01) — lockstep
+    -- relaxation with mart_pl_trend + mart_financial_health: accept
+    -- fp = 'FY' OR fp IS NULL so SEC-omitted fp annuals reach the mart.
+    -- Quarterly Q1/Q2/Q3 rows carry populated fp so the NULL branch is
+    -- only legitimate annual rows; Risk 48 span filter at sat_resolved
+    -- enforces the 350-380 day annual band as a defense-in-depth gate.
     SELECT
         b.hub_company_hk,
         b.link_filing_concept_period_hk,
@@ -134,7 +141,7 @@ WITH bridge_fy AS (
         b.fiscal_year,
         b.period_end_date
     FROM {{ ref('bridge_company_concept_period') }} b
-    WHERE b.fiscal_period = 'FY'
+    WHERE b.fiscal_period = 'FY' OR b.fiscal_period IS NULL
 ),
 
 pit_resolved AS (

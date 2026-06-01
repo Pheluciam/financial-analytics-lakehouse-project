@@ -120,7 +120,16 @@ def main() -> int:
     if not deps_result.success:
         return 1
 
-    print("[run_dbt_in_glue] Running dbt build", flush=True)
+    # `--threads 2` is the Risk 64 mitigation — dbt-athena's default 4-thread
+    # concurrency at full-refresh on the ~265-node cascade busts S3
+    # DeleteObjects per-prefix burst limit and the internal 5-retry loop
+    # exhausts ("SlowDown ... reached max retries: 5"). 2 threads keep deletes
+    # serialized enough to stay under the throttle. Matches the local standing
+    # cascade command (`dbt build --full-refresh --threads 2`) — Glue layer
+    # was missing this flag in Phase 5 session 4 (Step Functions production
+    # sign-off ran without --full-refresh so the issue stayed dormant); Step M
+    # session 4.5 surfaced it on the first --full-refresh-equivalent rebuild.
+    print("[run_dbt_in_glue] Running dbt build --threads 2", flush=True)
     result = runner.invoke(
         [
             "build",
@@ -130,6 +139,8 @@ def main() -> int:
             str(LOCAL_PROJECT_DIR),
             "--target",
             DBT_TARGET,
+            "--threads",
+            "2",
         ]
     )
     print(f"[run_dbt_in_glue] dbt build success={result.success}", flush=True)

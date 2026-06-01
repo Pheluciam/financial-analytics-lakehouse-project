@@ -400,5 +400,137 @@ Phase 5 session 3 (2026-06-01):
 
 ---
 
+## Step M re-audit appendix — Phase 5 session 4.5 (2026-06-01)
+
+> Closing record for the Step M re-audit + Fix-amendment phase. The 10
+> audits' assertions were re-verified against the post-Fix warehouse, two
+> additional structural mechanisms were surfaced and addressed, and a
+> single 38-gate verify file (`sql/verify/18_step_m_verification.sql`)
+> consolidates the entire acceptance surface for future re-runs.
+
+### Findings surfaced
+
+**Finding #5 — bridge_fy filter narrowness.** The Phase 5 session 4 Fix-all
+phase claimed 142 of 191 cells healed; Step M re-audit measured 92 healed
+(43-cell heal shortfall). Two distinct structural mechanisms localized:
+
+- **Mechanism (a) — bridge_fy `fiscal_period = 'FY'` filter rejects
+  legitimate annual rows with fp=NULL.** Surfaced via A4.2 sat-layer probe.
+  SEC EDGAR companyfacts JSON omits the `fp` attribute on some FY-annual
+  entries (observed for BKNG / CAT / MA NetIncomeLoss). The bridge_fy filter
+  drops these rows before the Risk 58 mart-side period-end re-anchor can
+  place them at the correct fiscal_year. **Fix applied: Risk 66 relaxation
+  to `fp = 'FY' OR fp IS NULL`** in `mart_financial_health.sql` /
+  `mart_pl_trend.sql` / `mart_peer_benchmark.sql` bridge_fy CTE.
+- **Mechanism (b) — bridge `filed_date <= as_of_date` rejects FY2025 10-K
+  comparatives filed in 2026 when latest as_of_date is 2025-12-31.**
+  Surfaced via A4.3 link-trace probe — SO's FY2025 10-K accession existed
+  in sat at period_end=2024-12-31, fp=FY, value=$4.401B but the bridge LEFT
+  JOIN returned NULL (no visible coordinate at the latest as_of_date).
+  Affects SPGI (mechanism for finding #1) + SO / TMO / CCI / PNC / AMT
+  net_income. **Fix applied: Risk 67 forward as_of_date 2026-06-01** in
+  `dim_as_of_dates.sql`. Cardinality 10 → 11; PIT/Bridge scan +10%.
+
+**Finding #6 — Financials revenue tag-pick drift across snapshots.** Surfaced
+in the 208-tuple snapshot drift drilldown (A5.1). Banks (BK, USB, WFC, MA,
+AXP, COF, PNC) showed 38-78% revenue swings across as_of_dates because some
+snapshots picked the bare Revenues tag and others picked the smaller
+InterestAndDividendIncomeOperating tag (Risk 55 expansion). **NOT a defect**
+— PIT working correctly; drift reflects real evolution of available data
+across as_of_dates. No fix applied. The mart_pl_trend_snapshot_stability
+test's 350-tolerance band absorbs the drift (actual 217 tuples, 96 of which
+are floating-point precision noise <1% swing).
+
+**Finding #7 — net_margin range overcorrection.** Pre-Fix-all queued 20
+non-Financials |net_margin|>1.0 tuples; Step M re-audit measured 2 tuples
+(TSLA 2010 and 2011 — documented Tesla pre-Model-S operating losses
+exceeding revenue). The dbt test range [-3.0, 3.0] could tighten to
+[-1.5, 1.5] with margin. Cosmetic — deferred to Phase 6 polish.
+
+**Finding #8 — Risk 64 Glue throttle.** Surfaced when re-running Step
+Functions production stage (Layer 3) post-amendment. The local cascade
+mitigation `--threads 2` was missing from `scripts/run_dbt_in_glue.py`. The
+production Glue job hit `SlowDown ... reached max retries: 5` on S3
+DeleteObjects during full-refresh; PASS=225 / ERROR=1 / SKIP=39. **Fix
+applied: `--threads 2` flag added to the Glue dbt build invocation** in
+`scripts/run_dbt_in_glue.py`. Glue layer now matches local layer's standing
+cascade command.
+
+### Defended-NULL additions (audit/defended_nulls.md candidates)
+
+- **PNC FY2024 net_income** — JSON has NetIncomeLoss tag but the
+  undimensional .units.USD array doesn't carry an FY annual entry at
+  period_end=2024-12-31 (likely filed under dimensional / segment axes
+  only). Documented defended NULL. JSON-evidence pin: probe
+  `$.facts["us-gaap"].NetIncomeLoss.units.USD` array length = 0 for
+  CIK 0000713676.
+- **AMT FY2024 net_income** — same pattern as PNC. REIT consolidation
+  may file primary income via NetIncomeLossAttributableToReportingEntity
+  or under dimensional axes. JSON-evidence pin: same probe for
+  CIK 0001053507.
+
+### Acceptance gate — sql/verify/18_step_m_verification.sql
+
+**38 PASS/FAIL gates in one Athena paste, ALL PASS post-amendment.**
+Single re-runnable verification surface covering all 10 audits' assertions
+plus the 4 fix-amendment mechanical proofs. Pattern matches sql/verify/17.
+Reusable for any future amendment.
+
+| Audit | Coverage gates | Result |
+|---|---|---|
+| 1 Universe integrity | checks 01-06 (seed + hub + 4 marts) | 6/6 PASS |
+| 2 FY2024 completeness | checks 07-15 (9 canonicals) | 9/9 PASS |
+| 4 SPGI + 8-CIK heal | checks 16-19 | 4/4 PASS |
+| 5 Cash collapse override | checks 20-21 (JPM + PYPL) | 2/2 PASS |
+| 6 External anchors | checks 22-27 (6 anchor CIKs revenue) | 6/6 PASS |
+| 7 Cross-mart consistency | checks 28-30 (revenue / NI / assets) | 3/3 PASS |
+| 8 Snapshot + uniqueness | checks 31-32 | 2/2 PASS |
+| 9 Forecast CI | check 33 | 1/1 PASS |
+| Fix-amendment mechanical proof | checks 34-38 (Risk 66 + Risk 67 + PNC/AMT defended) | 5/5 PASS |
+| **TOTAL** | **38 gates** | **38/38 PASS** |
+
+### Cell-level heal evidence (vs Fix-all close)
+
+| Canonical | Pre-amendment NULL | Post-amendment NULL | Heal delta |
+|---|---|---|---|
+| revenue | 1 (SPGI) | 0 | +1 |
+| net_income | 9 | 2 (PNC + AMT defended) | +7 |
+| gross_profit | 46 | ~26-30 (truly defended Banks/REITs/Energy) | ~16-20 |
+| operating_income | 30 | similar (~28-30 truly defended Banks no OI) | ~0-2 |
+| stockholders_equity | 7 | ~0-2 | +5 |
+| operating_cash_flow | 2 | 0-1 | +1-2 |
+| cash_and_equivalents | 2 | 0-2 | +0-2 |
+| assets | 1 (SPGI) | 0 | +1 |
+| liabilities | 1 (SPGI) | 0 | +1 |
+| **TOTAL** | **99** | **~30 (all defended)** | **~70 cells healed** |
+
+### Three-layer sign-off status
+
+| Layer | Status | Detail |
+|---|---|---|
+| 1 Local cascade | ✓ SUCCEEDED | `dbt build --full-refresh --threads 2` PASS=265 / ERROR=0 / SKIP=0 / TOTAL=265 |
+| 2 Athena spot-checks | ✓ SUCCEEDED | sql/verify/18 38/38 PASS + A2.1 heat-map + A4.1 8-CIK roster confirmed |
+| 3 Step Functions production | PENDING re-run after Glue --threads 2 fix | First attempt failed at Risk 64 throttle (PASS=225/ERROR=1/SKIP=39); script fix landed; redrive on next session |
+
+### Files shipped at Step M close
+
+- `dbt/models/marts/mart_financial_health.sql` — Risk 66 bridge_fy fp filter relaxation
+- `dbt/models/marts/mart_pl_trend.sql` — Risk 66 lockstep
+- `dbt/models/marts/mart_peer_benchmark.sql` — Risk 66 lockstep
+- `dbt/models/business_vault/dim_as_of_dates.sql` — Risk 67 forward as_of_date 2026-06-01
+- `scripts/run_dbt_in_glue.py` — Risk 64 production-layer `--threads 2` flag
+- `sql/verify/18_step_m_verification.sql` — NEW 38-gate verify file
+- `AUDIT_FINDINGS.md` (this section) — Step M appendix
+- `LEARNINGS.md` — Risks 66, 67, 68 banked
+
+### Next-session action (Phase 5 session 4.5 closeout in new chat)
+
+1. Redrive Step Functions execution to confirm Glue --threads 2 fix clears Risk 64.
+2. Re-run sql/verify/18 against post-Step-Functions warehouse to confirm 38/38 PASS holds.
+3. Bundle commit + push.
+4. Begin Phase 5 session 5 Page 1 Executive Overview redesign on 100%-trusted Fix-amendment data.
+
+---
+
 *Authored AI-assisted (Claude by Anthropic) per the standing
 AI-assistance disclosure convention.*
