@@ -9,7 +9,7 @@
 
 ---
 
-## 1. Phase 5 session 1 status — v1 SHIPPED, redesign queued
+## 1. Phase 5 session 1 status — v1 SHIPPED, redesign queued; Phase 5 session 4.5 closed three-layer Step M sign-off (2026-06-01) — data trust now at 100% for redesign
 
 Session 1 shipped a working v1 of the executive overview page —
 data model, _Measures discipline, 4 KPI cards, hero trend chart, 2
@@ -22,6 +22,14 @@ distinction from Projects #1 and #2.
 all 5 pages with real complexity. v1 .pbix is committed as the working
 baseline; sessions 2-6 implement the redesign per the spec in section 3
 below.
+
+**Phase 5 session 4.5 close update (2026-06-01).** Marts now at 100%
+three-layer trust (Layer 1 local cascade PASS=265, Layer 2 Athena
+sql/verify/18 48/48 PASS, Layer 3 Step Functions production execution
+SUCCEEDED 15:52). The 2026-06-01 forward as_of_date (Risk 67) gives every
+Page 1-6 mart query the latest annual snapshot including FY2025-10-K
+comparative coverage. Session 5 kickoff prep — what to refresh / delete /
+replace / add / keep on Page 1 — is in section 3.1 below.
 
 ---
 
@@ -110,6 +118,12 @@ coverage + snapshot date:
 Source: SEC EDGAR XBRL  |  Universe: S&P 100 (107 companies)  |  FY2024 coverage: 97 of 107  |  Snapshot: 2025-12-31
 ```
 
+**Refresh from Phase 5 session 5 onwards (2026-06-01).** With Risk 67 forward as_of_date 2026-06-01 landed at session 4.5 close, the FY2024 coverage advances to 106 of 107 and the Snapshot caption advances to 2026-06-01. Updated template:
+
+```
+Source: SEC EDGAR XBRL  |  Universe: S&P 100 (107 companies)  |  FY2024 coverage: 106 of 107  |  Snapshot: 2026-06-01
+```
+
 Coverage figure references Risk 55 (sector-specific us-gaap tag mapping
 gap — 18 of 107 S&P 100 companies missing FY2024 revenue, mostly
 Financials using InterestAndDividendIncomeOperating /
@@ -165,6 +179,14 @@ Total Net Income (Latest FY), Net Margin (Latest FY) — all using the
 Latest Complete FY pattern from 2.5. Add: Revenue Sparkline (per-year
 revenue trajectory), Sector Revenue (sector breakdown), YoY Rank
 measures.
+
+**Session 5 kickoff prep (added 2026-06-01 at Phase 5 session 4.5 close).** Page 1 v1 is currently on disk at `powerbi/financial_analytics.pbix` with the generic layout (4 plain cards + plain trajectory + 2 slicers + footer). Walk into session 5 with this map in hand:
+
+- **FIRST action — Power Query refresh.** The .pbix is on the stale 2025-12-31 snapshot. Risk 67 added the forward as_of_date 2026-06-01 and Risk 66 healed BKNG/CAT/MA/SO/TMO/CCI FY2024 net_income. Hit Home → Refresh in PBI Desktop before opening any visual. The 4 KPI card numbers ($9.9T / 6.5% / $1.5T / 14.9%) and the footer caveat strip (FY2024 coverage 97 → 106 of 107; Snapshot 2025-12-31 → 2026-06-01) all shift on refresh. Verify the refreshed values against the bands in `sql/verify/18` checks 7-15 before proceeding.
+- **DELETE / REPLACE.** Plain KPI cards → KPI cards with embedded sparklines (PBI sparkline-in-card pattern, Microsoft Learn 2026 docs). Plain "Revenue Trend by fiscal_year" line chart → annotated trajectory with reference-line overlays for COVID shading (FY2020), ASC 606 marker (FY2018), 2008-2009 recession band. These are the two distinctive elements — domain-knowledge tells that signal financial-analytics, not generic time-series BI.
+- **ADD.** Sector treemap on the right of the trajectory (~1/3 width) showing per-sector revenue contribution at latest FY (demonstrates dim_company → mart_pl_trend conformed dim visually). Bottom-row Top 5 revenue YoY gainers + Top 5 decliners as small horizontal bar tiles. Drill-through target setup pointing at Page 6 Company Detail (Page 6 itself gets built later; the drill-through wiring stub goes in now). Three new measures on _Measures: Revenue Sparkline, Sector Revenue, Revenue YoY Rank.
+- **KEEP (no work needed).** _Measures table architecture and all 7 existing measures (Total Revenue / Revenue YoY % / Total Net Income / Net Margin / Revenue Trend / Revenue Historical / Revenue Forecast). Both slicers (gics_sector + as_of_date). All 8 model relationships (each mart → dim_company on cik + → dim_as_of_date on as_of_date). Theme = Executive. Coverage caveat strip pattern.
+- **Open direction-check to decide at session kickoff (30 seconds, no question yet — choose at session open):** whether Revenue YoY Rank gets computed in DAX on the existing mart_pl_trend OR pre-computed as a new column in dbt. Architecturally-honest path is dbt — mart_peer_benchmark already pre-computes peer_rank; extending the same pattern to YoY rank in mart_pl_trend (or a sibling rank column) keeps the rank-computation discipline at the warehouse layer. Faster path is DAX. Senior-DE default = dbt unless time-pressured.
 
 ### 3.2 Page 2 — P&L Trend Deep-Dive
 
