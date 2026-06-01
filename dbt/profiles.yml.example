@@ -40,6 +40,11 @@ financial_analytics_athena:
       # results with table data. Project convention: zone=silver/.
       s3_data_dir: s3://phil-financial-analytics-lakehouse/zone=silver/
 
-      # Parallel model execution. 4 matches typical laptop core count and
-      # caps concurrent Athena queries (each one costs pennies-per-scan).
-      threads: 4
+      # Parallel model execution. Dropped from 4 to 2 at Phase 5 session 4
+      # Fix-all close (2026-06-01) after Risk 64 surfaced: dbt-athena's
+      # parallel Iceberg table rebuilds at 4 threads bust S3's per-prefix
+      # DeleteObjects burst ceiling on full-refresh AND on table-materialization
+      # cleanup in incremental runs, returning SlowDown after 5 internal
+      # retries. 2 threads keeps the rate under the burst limit. Standing
+      # setting for this project on dbt-athena + Iceberg.
+      threads: 2
