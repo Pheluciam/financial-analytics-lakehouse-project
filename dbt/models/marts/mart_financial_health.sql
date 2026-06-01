@@ -158,21 +158,33 @@ pit_resolved AS (
 
 sat_resolved AS (
     -- Equi-join sat_concept_value on the PIT-resolved (link_hk, ldts)
-    -- coordinate. 9-canonical filter + Risk 48 per-concept-type
-    -- conditional period filter applied here. accession_number carried
-    -- through for the Risk 42 dedup step.
+    -- coordinate. 13-canonical filter (9 surfaced canonicals + 4 mart-layer
+    -- derivation inputs added at Phase 5 session 4 Fix-all: cost_of_revenue,
+    -- liabilities_and_se, stockholders_equity_including_nci, minority_interest).
+    -- accession_number carried through for the Risk 42 dedup step.
     --
     -- Risk 48 conditional structure: balance-sheet canonicals (assets,
-    -- liabilities, stockholders_equity, cash_and_equivalents) are point-
-    -- in-time observations with NULL or instant period_start_date — the
-    -- 350-380 day span filter would drop them entirely. Conditional OR
-    -- branches by canonical type. Income statement + cash flow canonicals
-    -- (revenue, gross_profit, operating_income, net_income,
-    -- operating_cash_flow) all carry the FY span and get the full filter.
+    -- liabilities, liabilities_and_se, stockholders_equity,
+    -- stockholders_equity_including_nci, minority_interest,
+    -- cash_and_equivalents) are point-in-time observations with NULL or
+    -- instant period_start_date — the 350-380 day span filter would drop
+    -- them entirely. Conditional OR branches by canonical type. Income
+    -- statement + cash flow canonicals (revenue, gross_profit,
+    -- operating_income, net_income, cost_of_revenue, operating_cash_flow)
+    -- carry the FY span and get the full filter.
+    --
+    -- Risk 58 period-end re-anchor (Phase 5 session 4, 2026-06-01) — the
+    -- prior year(scv.period_end_date) IN (scv.fiscal_year, scv.fiscal_year + 1)
+    -- filter has been REMOVED and fiscal_year is now derived from
+    -- year(scv.period_end_date). SPGI FY2024 (whose period_end_date=2024-12-31
+    -- data lives only as fy=2025 comparative under FY2025 10-K + 2025 10-Qs)
+    -- now lands in the mart at fiscal_year=2024 instead of being dropped
+    -- by the 2024 NOT IN (2025, 2026) check. Heals Audits 4 + 7 + 8 in one
+    -- fix.
     SELECT
         pr.hub_company_hk,
         pr.as_of_date,
-        pr.fiscal_year,
+        year(scv.period_end_date) AS fiscal_year,
         pr.period_end_date,
         scv.canonical_concept,
         scv.accession_number,
@@ -185,11 +197,16 @@ sat_resolved AS (
     WHERE scv.canonical_concept IN (
             'revenue', 'gross_profit', 'operating_income', 'net_income',
             'assets', 'liabilities', 'stockholders_equity',
-            'cash_and_equivalents', 'operating_cash_flow'
+            'cash_and_equivalents', 'operating_cash_flow',
+            'cost_of_revenue', 'liabilities_and_se',
+            'stockholders_equity_including_nci', 'minority_interest'
           )
-      AND year(scv.period_end_date) IN (scv.fiscal_year, scv.fiscal_year + 1)
       AND (
-          scv.canonical_concept IN ('assets', 'liabilities', 'stockholders_equity', 'cash_and_equivalents')
+          scv.canonical_concept IN (
+              'assets', 'liabilities', 'liabilities_and_se',
+              'stockholders_equity', 'stockholders_equity_including_nci',
+              'minority_interest', 'cash_and_equivalents'
+          )
           OR date_diff('day', scv.period_start_date, scv.period_end_date) BETWEEN 350 AND 380
       )
 ),
@@ -233,7 +250,7 @@ deduped AS (
             cr.*,
             ROW_NUMBER() OVER (
                 PARTITION BY cr.cik, cr.as_of_date, cr.fiscal_year, cr.canonical_concept
-                ORDER BY cr.accession_number DESC
+                ORDER BY cr.accession_number DESC, cr.period_end_date DESC
             ) AS rn
         FROM company_resolved cr
     ) ranked
@@ -248,6 +265,15 @@ pivoted AS (
     -- per-canonical row in the partition shares the same period_end_date
     -- by Risk 48 filter — MAX is a defensive tie-breaker for the rare
     -- BS-vs-IS calendar-vs-fiscal-year-end straddle case).
+    --
+    -- 4 additional canonical columns at Phase 5 session 4 Fix-all serve
+    -- as derivation inputs in the derived CTE below and are NOT projected
+    -- to the final mart surface: cost_of_revenue, liabilities_and_se,
+    -- stockholders_equity_including_nci, minority_interest. These give
+    -- mart_financial_health a fallback path to fill gross_profit /
+    -- stockholders_equity / liabilities for companies that don't file the
+    -- direct tag but do file derivable upstream tags (Audit 3 NEVER_IN_SAT
+    -- 65-cell derivable bucket).
     SELECT
         cik,
         entity_name,
@@ -255,23 +281,52 @@ pivoted AS (
         fiscal_year,
         MAX(period_end_date) AS period_end_date,
         MAX(CASE WHEN canonical_concept = 'revenue' THEN value_numeric END) AS revenue,
-        MAX(CASE WHEN canonical_concept = 'gross_profit' THEN value_numeric END) AS gross_profit,
+        MAX(CASE WHEN canonical_concept = 'gross_profit' THEN value_numeric END) AS gross_profit_direct,
         MAX(CASE WHEN canonical_concept = 'operating_income' THEN value_numeric END) AS operating_income,
         MAX(CASE WHEN canonical_concept = 'net_income' THEN value_numeric END) AS net_income,
         MAX(CASE WHEN canonical_concept = 'assets' THEN value_numeric END) AS assets,
-        MAX(CASE WHEN canonical_concept = 'liabilities' THEN value_numeric END) AS liabilities,
-        MAX(CASE WHEN canonical_concept = 'stockholders_equity' THEN value_numeric END) AS stockholders_equity,
+        MAX(CASE WHEN canonical_concept = 'liabilities' THEN value_numeric END) AS liabilities_direct,
+        MAX(CASE WHEN canonical_concept = 'stockholders_equity' THEN value_numeric END) AS stockholders_equity_direct,
         MAX(CASE WHEN canonical_concept = 'cash_and_equivalents' THEN value_numeric END) AS cash_and_equivalents,
-        MAX(CASE WHEN canonical_concept = 'operating_cash_flow' THEN value_numeric END) AS operating_cash_flow
+        MAX(CASE WHEN canonical_concept = 'operating_cash_flow' THEN value_numeric END) AS operating_cash_flow,
+        MAX(CASE WHEN canonical_concept = 'cost_of_revenue' THEN value_numeric END) AS cost_of_revenue,
+        MAX(CASE WHEN canonical_concept = 'liabilities_and_se' THEN value_numeric END) AS liabilities_and_se,
+        MAX(CASE WHEN canonical_concept = 'stockholders_equity_including_nci' THEN value_numeric END) AS stockholders_equity_including_nci,
+        MAX(CASE WHEN canonical_concept = 'minority_interest' THEN value_numeric END) AS minority_interest
     FROM deduped
     GROUP BY cik, entity_name, as_of_date, fiscal_year
 ),
 
-with_ratios AS (
-    -- Derived ratios. NULLIF(denominator, 0) → NULL ratio when denominator
-    -- is zero; NULL value → NULL ratio by SQL arithmetic semantics. CAST
-    -- to DOUBLE for ratio columns — ratios are floating-point by nature
-    -- and downstream PBI/Athena expect DOUBLE for percentage formatting.
+derived AS (
+    -- Mart-layer derivation chain (Phase 5 session 4 Fix-all, 2026-06-01)
+    -- — heals 65 NEVER_IN_SAT cells in the Audit 3 derivable bucket
+    -- without touching upstream sat semantics. Each canonical surfaces
+    -- as COALESCE(direct, derived):
+    --
+    --   gross_profit = revenue − cost_of_revenue
+    --     The cost_of_revenue canonical collapses CostOfRevenue +
+    --     CostOfGoodsAndServicesSold + CostOfGoodsSold + CostOfServices
+    --     into one value via sat-level Risk 47 value-DESC collapse.
+    --     Companies that file any CostOf* tag get a derived gross_profit
+    --     even when they don't file the direct GrossProfit tag.
+    --
+    --   stockholders_equity = stockholders_equity_including_nci − minority_interest
+    --     For filers (T, VZ, PG, CAT per Audit 3 A3.7) that report
+    --     SEIncludingNCI + MinorityInterest separately instead of bare
+    --     StockholdersEquity. SEIncludingNCI = bare SE + NCI by FASB
+    --     definition, so the subtraction recovers bare SE deterministically.
+    --
+    --   liabilities = liabilities_and_se − stockholders_equity_final
+    --     For filers that file the combined LiabilitiesAndStockholdersEquity
+    --     tag but not the bare Liabilities tag (29 cells per Audit 3 A3.6).
+    --     The stockholders_equity term uses the COALESCE'd value (direct
+    --     OR derived) so the chain correctly subtracts whichever form of
+    --     SE is available — derivation does not require bare SE.
+    --
+    -- cash_and_equivalents needs no derivation here — the Risk 59
+    -- collapse_rule override at sat_concept_value handles cash directly:
+    -- bare CashAndCashEquivalentsAtCarryingValue wins when present, the
+    -- Restricted variant fallback when bare is absent.
     SELECT
         p.cik,
         p.entity_name,
@@ -279,23 +334,60 @@ with_ratios AS (
         p.fiscal_year,
         p.period_end_date,
         p.revenue,
-        p.gross_profit,
+        COALESCE(
+            p.gross_profit_direct,
+            p.revenue - p.cost_of_revenue
+        ) AS gross_profit,
         p.operating_income,
         p.net_income,
         p.assets,
-        p.liabilities,
-        p.stockholders_equity,
+        COALESCE(
+            p.liabilities_direct,
+            p.liabilities_and_se - COALESCE(
+                p.stockholders_equity_direct,
+                p.stockholders_equity_including_nci - p.minority_interest
+            )
+        ) AS liabilities,
+        COALESCE(
+            p.stockholders_equity_direct,
+            p.stockholders_equity_including_nci - p.minority_interest
+        ) AS stockholders_equity,
         p.cash_and_equivalents,
-        p.operating_cash_flow,
-        CAST(p.gross_profit AS DOUBLE)         / NULLIF(CAST(p.revenue AS DOUBLE), 0)              AS gross_margin,
-        CAST(p.operating_income AS DOUBLE)     / NULLIF(CAST(p.revenue AS DOUBLE), 0)              AS operating_margin,
-        CAST(p.net_income AS DOUBLE)           / NULLIF(CAST(p.revenue AS DOUBLE), 0)              AS net_margin,
-        CAST(p.net_income AS DOUBLE)           / NULLIF(CAST(p.assets AS DOUBLE), 0)               AS return_on_assets,
-        CAST(p.net_income AS DOUBLE)           / NULLIF(CAST(p.stockholders_equity AS DOUBLE), 0)  AS return_on_equity,
-        CAST(p.liabilities AS DOUBLE)          / NULLIF(CAST(p.stockholders_equity AS DOUBLE), 0)  AS debt_to_equity,
-        CAST(p.operating_cash_flow AS DOUBLE)  / NULLIF(CAST(p.revenue AS DOUBLE), 0)              AS operating_cf_margin,
-        CAST(p.cash_and_equivalents AS DOUBLE) / NULLIF(CAST(p.assets AS DOUBLE), 0)               AS cash_to_assets
+        p.operating_cash_flow
     FROM pivoted p
+),
+
+with_ratios AS (
+    -- Derived ratios. NULLIF(denominator, 0) → NULL ratio when denominator
+    -- is zero; NULL value → NULL ratio by SQL arithmetic semantics. CAST
+    -- to DOUBLE for ratio columns — ratios are floating-point by nature
+    -- and downstream PBI/Athena expect DOUBLE for percentage formatting.
+    -- Sources from the derived CTE so ratios use the COALESCE'd canonical
+    -- values (direct tag wins, mart-layer derivation as fallback).
+    SELECT
+        d.cik,
+        d.entity_name,
+        d.as_of_date,
+        d.fiscal_year,
+        d.period_end_date,
+        d.revenue,
+        d.gross_profit,
+        d.operating_income,
+        d.net_income,
+        d.assets,
+        d.liabilities,
+        d.stockholders_equity,
+        d.cash_and_equivalents,
+        d.operating_cash_flow,
+        CAST(d.gross_profit AS DOUBLE)         / NULLIF(CAST(d.revenue AS DOUBLE), 0)              AS gross_margin,
+        CAST(d.operating_income AS DOUBLE)     / NULLIF(CAST(d.revenue AS DOUBLE), 0)              AS operating_margin,
+        CAST(d.net_income AS DOUBLE)           / NULLIF(CAST(d.revenue AS DOUBLE), 0)              AS net_margin,
+        CAST(d.net_income AS DOUBLE)           / NULLIF(CAST(d.assets AS DOUBLE), 0)               AS return_on_assets,
+        CAST(d.net_income AS DOUBLE)           / NULLIF(CAST(d.stockholders_equity AS DOUBLE), 0)  AS return_on_equity,
+        CAST(d.liabilities AS DOUBLE)          / NULLIF(CAST(d.stockholders_equity AS DOUBLE), 0)  AS debt_to_equity,
+        CAST(d.operating_cash_flow AS DOUBLE)  / NULLIF(CAST(d.revenue AS DOUBLE), 0)              AS operating_cf_margin,
+        CAST(d.cash_and_equivalents AS DOUBLE) / NULLIF(CAST(d.assets AS DOUBLE), 0)               AS cash_to_assets
+    FROM derived d
 ),
 
 hashed AS (

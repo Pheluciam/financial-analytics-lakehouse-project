@@ -86,19 +86,36 @@
     'SalesRevenueNet',
     'RevenueFromContractWithCustomerExcludingAssessedTax',
     'RevenueFromContractWithCustomerIncludingAssessedTax',
+    'InterestAndDividendIncomeOperating',
     'NetIncomeLoss',
     'OperatingIncomeLoss',
     'GrossProfit',
     'CostOfRevenue',
+    'CostOfGoodsAndServicesSold',
+    'CostOfGoodsSold',
+    'CostOfServices',
     'Assets',
     'Liabilities',
+    'LiabilitiesAndStockholdersEquity',
     'StockholdersEquity',
+    'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest',
+    'MinorityInterest',
     'CashAndCashEquivalentsAtCarryingValue',
+    'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents',
     'NetCashProvidedByUsedInOperatingActivities'
 ] %}
 
 WITH source AS (
-    SELECT * FROM {{ ref('stg_sec_edgar__companyfacts_raw') }}
+    -- Universe filter (Phase 5 session 4 Fix-all, 2026-06-01). INNER JOIN
+    -- to sp100_company_sector seed scopes the warehouse to the 107 S&P 100
+    -- CIKs. Mirrors hub_company.sql's universe contract — without this
+    -- filter, orphan-CIK rows propagate ~15k rows with hub_company_hk
+    -- values absent from hub_company, breaking the relationships test
+    -- (Audit 1 A1.5 surfaced this orphan-propagation pattern across all
+    -- 4 marts pre-Fix).
+    SELECT s.*
+    FROM {{ ref('stg_sec_edgar__companyfacts_raw') }} s
+    INNER JOIN {{ ref('sp100_company_sector') }} u ON u.cik = s.cik
 ),
 
 canonical_dict AS (

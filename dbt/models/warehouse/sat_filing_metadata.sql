@@ -83,19 +83,34 @@
     'SalesRevenueNet',
     'RevenueFromContractWithCustomerExcludingAssessedTax',
     'RevenueFromContractWithCustomerIncludingAssessedTax',
+    'InterestAndDividendIncomeOperating',
     'NetIncomeLoss',
     'OperatingIncomeLoss',
     'GrossProfit',
     'CostOfRevenue',
+    'CostOfGoodsAndServicesSold',
+    'CostOfGoodsSold',
+    'CostOfServices',
     'Assets',
     'Liabilities',
+    'LiabilitiesAndStockholdersEquity',
     'StockholdersEquity',
+    'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest',
+    'MinorityInterest',
     'CashAndCashEquivalentsAtCarryingValue',
+    'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents',
     'NetCashProvidedByUsedInOperatingActivities'
 ] %}
 
 WITH source AS (
-    SELECT * FROM {{ ref('stg_sec_edgar__companyfacts_raw') }}
+    -- Universe filter (Phase 5 session 4 Fix-all, 2026-06-01). INNER JOIN
+    -- to sp100_company_sector seed scopes the warehouse to the 107 S&P 100
+    -- CIKs. Mirrors hub_company.sql's universe contract — keeps sat
+    -- filing-metadata rows aligned with the universe-scoped hub_filing
+    -- accession set.
+    SELECT s.*
+    FROM {{ ref('stg_sec_edgar__companyfacts_raw') }} s
+    INNER JOIN {{ ref('sp100_company_sector') }} u ON u.cik = s.cik
 ),
 
 -- Per-concept UNNEST. Projects the parent business key (accession_number)

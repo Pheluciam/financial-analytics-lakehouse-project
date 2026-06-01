@@ -282,6 +282,17 @@ attempted but pulled out of:**
   latest historical observation. Companies with FY2024 latest forecast
   to FY2025-2027; companies with FY2025 latest forecast to FY2026-2028.
   Documented as expected behavior (Risk 56).
+- **Structural-shocks caveat strip (Risk 60).** Surface a small text
+  callout on Page 5 reading: "Forecasts are 3-year Holt-Winters /
+  ARIMA projections; structural events such as spinoffs, divestitures,
+  and M&A are not modeled. Forecasts for post-divestiture filers like
+  GE (2024 GE Vernova + GE HealthCare separations) and 3M (2024 fiber
+  optics + food safety divestitures) should be interpreted accordingly."
+  Audit 9 confirmed 3 such outlier forecast rows (GE 2027 0.42x, MMM
+  2026 0.42x, MMM 2027 0.13x). Univariate models can't distinguish a
+  one-time structural step-down from a continuing trend; explicit
+  viewer caveat is the documented mitigation pending intervention
+  analysis / structural-break detection in a future enhancement.
 
 **Layout:**
 

@@ -48,19 +48,35 @@
     'SalesRevenueNet',
     'RevenueFromContractWithCustomerExcludingAssessedTax',
     'RevenueFromContractWithCustomerIncludingAssessedTax',
+    'InterestAndDividendIncomeOperating',
     'NetIncomeLoss',
     'OperatingIncomeLoss',
     'GrossProfit',
     'CostOfRevenue',
+    'CostOfGoodsAndServicesSold',
+    'CostOfGoodsSold',
+    'CostOfServices',
     'Assets',
     'Liabilities',
+    'LiabilitiesAndStockholdersEquity',
     'StockholdersEquity',
+    'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest',
+    'MinorityInterest',
     'CashAndCashEquivalentsAtCarryingValue',
+    'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents',
     'NetCashProvidedByUsedInOperatingActivities'
 ] %}
 
 WITH source AS (
-    SELECT * FROM {{ ref('stg_sec_edgar__companyfacts_raw') }}
+    -- Universe filter (Phase 5 session 4 Fix-all, 2026-06-01). INNER JOIN
+    -- to sp100_company_sector seed scopes the warehouse to the 107 S&P 100
+    -- CIKs. Mirrors hub_company.sql's universe contract — without this
+    -- filter, orphan-CIK rows would carry hub_company_hk values not
+    -- present in the universe-scoped hub_company, breaking the link's
+    -- relationships test.
+    SELECT s.*
+    FROM {{ ref('stg_sec_edgar__companyfacts_raw') }} s
+    INNER JOIN {{ ref('sp100_company_sector') }} u ON u.cik = s.cik
 ),
 
 -- Per-concept UNNEST — cik comes from the partition key on source,

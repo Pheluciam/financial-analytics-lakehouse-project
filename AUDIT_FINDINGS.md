@@ -371,7 +371,7 @@ Phase 5 session 3 (2026-06-01):
 
 ---
 
-## Warehouse state at audit-campaign close (snapshot)
+## Warehouse state at audit-campaign close (snapshot at 2026-06-01 session 3)
 
 - 107 seed CIKs.
 - 115 in Bronze (107 seed + 8 orphans).
@@ -380,6 +380,23 @@ Phase 5 session 3 (2026-06-01):
 - mart_financial_health 191 cells null across 9 canonicals at FY2024 latest snapshot — 142 fillable via Fix-all (Audits 4+5+derivation+seed expansion); 49 documented defended NULL.
 - ZERO mart/seed/DDL changes this session. Audit campaign was 100% read-only investigation per the locked operating principle.
 - Fix-all phase queued for the next session as ONE coherent commit + ONE cascade rebuild + ONE re-audit pass.
+
+---
+
+## Warehouse state at Fix-all close (snapshot at 2026-06-01 session 4)
+
+- 107 universe CIKs across hub_company + all 4 marts (Risk 63 cascade applied at hub + 5 warehouse siblings + 1 intermediate model).
+- 8 Bronze orphans (AIG/CVS/GD/LMT/MET/PLTR/SPG/UBER) dropped from the warehouse at the universe-filter boundary; Bronze itself preserved as-is.
+- 242/242 dbt tests passing (249 pre-Fix structural + 14 new Fix-all semantic - 21 deprecated/changed per dbt parser nodes; final TOTAL=242).
+- Risk 58 period-end re-anchor heals SPGI FY2024 + ~421 cross-mart divergences + 118 snapshot-stability drifts.
+- Risk 59 cash collapse_rule override heals 16 RESTRICTED_ONLY CIKs without inflating the 45 RESTRICTED_LARGER CIKs.
+- mart_financial_health derivation chain (gross_profit / liabilities / stockholders_equity via COALESCE(direct, derived)) fills 65 NEVER_IN_SAT derivable cells from cost_of_revenue / liabilities_and_se / stockholders_equity_including_nci + minority_interest alias inputs.
+- canonical_concepts_dictionary expanded 13 → 21 mappings; canonical_concept_tag_preference grew matching ranks + collapse_rule.
+- 6-place Jinja `{% set concepts %}` lockstep edits applied (int_sec_edgar__concepts + hub_filing + 2 links + 2 sats).
+- defended_nulls.md companion shipped with class breakdown + per-cell pin entries for the 49 residual NULL cells.
+- Risks 63 (universe filter cascade), 64 (S3 throttle), 65 (S&P 100 restatement floor) banked in LEARNINGS.md.
+- 12-check Audit-derived spot-check verify file (sql/verify/17) shipped for Phil's final eyeball confirmation in Athena Console.
+- Cascade rebuilt via `dbt build --full-refresh --threads 2` per Risk 64 mitigation pattern.
 
 ---
 

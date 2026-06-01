@@ -162,9 +162,9 @@ forecast_enriched AS (
         f.latest_historical_year,
         'forecast' AS row_kind
     FROM forecast_raw f
-    LEFT JOIN {{ ref('hub_company') }} hc
+    INNER JOIN {{ ref('hub_company') }} hc
         ON hc.cik = f.cik
-    LEFT JOIN {{ ref('sat_company_metadata') }} scm
+    INNER JOIN {{ ref('sat_company_metadata') }} scm
         ON scm.hub_company_hk = hc.hub_company_hk
 ),
 

@@ -165,18 +165,34 @@ sat_resolved AS (
     -- coordinate. Canonical concept filter applied here against the
     -- income_statement canonicals only. accession_number + period_start_date
     -- carried through for the Risk 42 + Risk 48 dedup steps. Risk 48
-    -- sanity filter (period span ~365 days + year(period_end) matches
-    -- fiscal_year ± 1) applied here to drop the intra-accession period-
-    -- chunk rows that SEC XBRL tags as fp=FY but actually span quarters
-    -- or half-years (Apple FY2019 10-K reports 11 rows all tagged fp=FY
-    -- fy=2019 across 3 actual FY periods + 8 quarter/half-year chunks).
-    -- Without the filter, the Risk 42 dedup picks one of the 11 non-
-    -- deterministically (all share accession_number, so accession_number
-    -- DESC tie-breaker is degenerate).
+    -- sanity filter (period span ~365 days) applied here to drop the
+    -- intra-accession period-chunk rows that SEC XBRL tags as fp=FY but
+    -- actually span quarters or half-years (Apple FY2019 10-K reports 11
+    -- rows all tagged fp=FY fy=2019 across 3 actual FY periods + 8
+    -- quarter/half-year chunks). Without the filter, the Risk 42 dedup
+    -- picks one of the 11 non-deterministically (all share accession_number,
+    -- so accession_number DESC tie-breaker is degenerate).
+    --
+    -- Risk 58 period-end re-anchor (Phase 5 session 4, 2026-06-01). The
+    -- prior year(scv.period_end_date) IN (scv.fiscal_year, scv.fiscal_year + 1)
+    -- filter has been REMOVED, and fiscal_year is now derived from
+    -- year(scv.period_end_date) rather than carried from the SEC fy
+    -- attribute. SEC EDGAR XBRL uses period-START-year convention for
+    -- 52/53-week filers (WMT, HD, TGT, LOW, TJX, NVDA, CRM, JNJ), so a
+    -- single 10-K reports both current-year and prior-year comparatives
+    -- under the same fy attribute + same accession_number with different
+    -- period_end_dates. Both rows passed the prior year-IN filter; Risk 42
+    -- dedup ORDER BY accession_number DESC produced a Trino ROW_NUMBER
+    -- tie that resolved non-deterministically across partitions, surfacing
+    -- as ~421 cross-mart divergent rows (Audit 7) + 118 snapshot drifts
+    -- (Audit 8) + SPGI FY2024 total absence from mart_financial_health
+    -- (Audit 4). Anchoring fiscal_year on year(period_end_date) puts the
+    -- two rows into distinct partitions, making dedup deterministic by
+    -- construction and resolving all three audits with one fix.
     SELECT
         pr.hub_company_hk,
         pr.as_of_date,
-        pr.fiscal_year,
+        year(scv.period_end_date) AS fiscal_year,
         pr.period_end_date,
         scv.canonical_concept,
         scv.accession_number,
@@ -189,7 +205,6 @@ sat_resolved AS (
         AND scv.load_datetime = pr.sat_concept_value_ldts
     WHERE scv.canonical_concept IN ('revenue', 'net_income')
       AND date_diff('day', scv.period_start_date, scv.period_end_date) BETWEEN 350 AND 380
-      AND year(scv.period_end_date) IN (scv.fiscal_year, scv.fiscal_year + 1)
 ),
 
 company_resolved AS (
@@ -239,7 +254,7 @@ deduped AS (
             cr.*,
             ROW_NUMBER() OVER (
                 PARTITION BY cr.cik, cr.as_of_date, cr.fiscal_year, cr.canonical_concept
-                ORDER BY cr.accession_number DESC
+                ORDER BY cr.accession_number DESC, cr.period_end_date DESC
             ) AS rn
         FROM company_resolved cr
     ) ranked

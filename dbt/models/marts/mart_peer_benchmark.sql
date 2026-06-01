@@ -161,13 +161,22 @@ sat_resolved AS (
     -- coordinate. Canonical-concept filter to the 3 peer-benchmarking
     -- canonicals applied here. accession_number + period_start_date
     -- carried through for the Risk 42 + Risk 48 dedup steps. Risk 48
-    -- sanity filter (period span ~365 days + year(period_end) matches
-    -- fiscal_year ± 1) applied here — see mart_pl_trend sat_resolved
-    -- for the full provenance narrative.
+    -- per-concept-type conditional span filter: balance-sheet 'assets' is
+    -- a point-in-time observation (NULL or instant period_start_date) so
+    -- the 350-380 day span filter is bypassed; income-statement canonicals
+    -- get the full filter. See mart_pl_trend sat_resolved for the full
+    -- provenance narrative on the Risk 48 mechanic.
+    --
+    -- Risk 58 period-end re-anchor (Phase 5 session 4, 2026-06-01) — the
+    -- prior year-IN filter has been REMOVED and fiscal_year is now
+    -- derived from year(scv.period_end_date) rather than carried from
+    -- the SEC fy attribute. Cross-mart consistency with mart_pl_trend +
+    -- mart_financial_health is by construction post-re-anchor (Audit 7
+    -- 421 divergent rows → 0; one fix heals Audits 4 + 7 + 8).
     SELECT
         pr.hub_company_hk,
         pr.as_of_date,
-        pr.fiscal_year,
+        year(scv.period_end_date) AS fiscal_year,
         pr.period_end_date,
         scv.canonical_concept,
         scv.accession_number,
@@ -179,7 +188,6 @@ sat_resolved AS (
         ON scv.link_filing_concept_period_hk = pr.link_filing_concept_period_hk
         AND scv.load_datetime = pr.sat_concept_value_ldts
     WHERE scv.canonical_concept IN ('revenue', 'net_income', 'assets')
-      AND year(scv.period_end_date) IN (scv.fiscal_year, scv.fiscal_year + 1)
       AND (
           scv.canonical_concept = 'assets'
           OR date_diff('day', scv.period_start_date, scv.period_end_date) BETWEEN 350 AND 380
@@ -229,7 +237,7 @@ deduped AS (
             cr.*,
             ROW_NUMBER() OVER (
                 PARTITION BY cr.cik, cr.as_of_date, cr.fiscal_year, cr.canonical_concept
-                ORDER BY cr.accession_number DESC
+                ORDER BY cr.accession_number DESC, cr.period_end_date DESC
             ) AS rn
         FROM company_resolved cr
     ) ranked

@@ -103,19 +103,34 @@
     'SalesRevenueNet',
     'RevenueFromContractWithCustomerExcludingAssessedTax',
     'RevenueFromContractWithCustomerIncludingAssessedTax',
+    'InterestAndDividendIncomeOperating',
     'NetIncomeLoss',
     'OperatingIncomeLoss',
     'GrossProfit',
     'CostOfRevenue',
+    'CostOfGoodsAndServicesSold',
+    'CostOfGoodsSold',
+    'CostOfServices',
     'Assets',
     'Liabilities',
+    'LiabilitiesAndStockholdersEquity',
     'StockholdersEquity',
+    'StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest',
+    'MinorityInterest',
     'CashAndCashEquivalentsAtCarryingValue',
+    'CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents',
     'NetCashProvidedByUsedInOperatingActivities'
 ] %}
 
 WITH source AS (
-    SELECT * FROM {{ ref('stg_sec_edgar__companyfacts_raw') }}
+    -- Universe filter (Phase 5 session 4 Fix-all, 2026-06-01). INNER JOIN
+    -- to sp100_company_sector seed scopes the warehouse to the 107 S&P 100
+    -- CIKs. Mirrors hub_company.sql's universe contract — sat rows align
+    -- with the universe-scoped link_filing_concept_period set, preserving
+    -- FK closure on every relationships test downstream.
+    SELECT s.*
+    FROM {{ ref('stg_sec_edgar__companyfacts_raw') }} s
+    INNER JOIN {{ ref('sp100_company_sector') }} u ON u.cik = s.cik
 ),
 
 canonical_dict AS (
@@ -123,14 +138,17 @@ canonical_dict AS (
     FROM {{ ref('canonical_concepts_dictionary') }}
 ),
 
--- Risk 45 resolution (Phase 4 session 2, 2026-05-30). Per-canonical
--- ordered tag preference list. INNER JOIN below in preference_ranked
--- enforces that every mapped tag in canonical_concepts_dictionary has
--- a preference_rank — a missing rank drops the row and surfaces as a
+-- Risk 45 resolution (Phase 4 session 2, 2026-05-30) + Risk 59 collapse_rule
+-- override (Phase 5 session 4, 2026-06-01). Per-canonical ordered tag
+-- preference list + collapse-rule override. INNER JOIN below in
+-- preference_ranked enforces that every mapped tag in
+-- canonical_concepts_dictionary has both a preference_rank and a
+-- collapse_rule — a missing row drops the observation and surfaces as a
 -- config gap downstream. Seed columns: canonical_concept, concept_name,
--- preference_rank (smallint, 1 = most-preferred).
+-- preference_rank (smallint, 1 = most-preferred), collapse_rule (varchar,
+-- 'value_desc' or 'preference_rank_asc').
 tag_preference AS (
-    SELECT canonical_concept, concept_name, preference_rank
+    SELECT canonical_concept, concept_name, preference_rank, collapse_rule
     FROM {{ ref('canonical_concept_tag_preference') }}
 ),
 
@@ -203,20 +221,32 @@ preference_ranked AS (
         co.fiscal_period,
         co.value,
         co.unit,
-        tp.preference_rank
+        tp.preference_rank,
+        tp.collapse_rule
     FROM canonical_observations co
     INNER JOIN tag_preference tp
         ON tp.canonical_concept = co.canonical_concept
         AND tp.concept_name = co.concept_name
 ),
 
--- Value disagreement collapse (Risk 45 + Risk 47 resolution). ROW_NUMBER
--- over the natural cardinal tuple, ORDER BY value DESC (analyst-correct
--- headline number wins) then preference_rank ASC (deterministic tie-
--- breaker between equal values). Keep rn = 1 — picks the largest
--- reported value per (cik, accession, canonical, period) tuple, with
--- the seed used only to disambiguate equal-value ties. See Risk 47 in
--- LEARNINGS for the v1→v2 flip rationale.
+-- Value disagreement collapse (Risk 45 + Risk 47 + Risk 59 resolution).
+-- ROW_NUMBER over the natural cardinal tuple. ORDER BY dispatches on the
+-- per-canonical collapse_rule from the seed:
+--   - collapse_rule = 'value_desc' (Risk 47 default for revenue and most
+--     other canonicals): largest value wins (analyst-correct headline),
+--     preference_rank ASC is the deterministic tertiary tie-breaker
+--     between equal values.
+--   - collapse_rule = 'preference_rank_asc' (Risk 59 override for
+--     cash_and_equivalents): preference_rank 1 wins regardless of value.
+--     Bare CashAndCashEquivalentsAtCarryingValue (rank 1) beats the
+--     Restricted superset variant (rank 2) when both are filed — heals
+--     16 RESTRICTED_ONLY CIKs (banks + 4 non-banks) via fallback to
+--     Restricted when bare is absent, without inflating the 45
+--     RESTRICTED_LARGER CIKs by the restricted-cash component.
+-- preference_rank ASC also appears as the universal tertiary tie-breaker
+-- so the ORDER BY is total even when two CASE branches both return NULL.
+-- See LEARNINGS Risk 47 (v1→v2 flip) and Risk 59 (collapse_rule override)
+-- for the diagnosis loops.
 collapsed_observations AS (
     SELECT
         cik,
@@ -240,7 +270,10 @@ collapsed_observations AS (
                     pr.period_end_date,
                     pr.fiscal_year,
                     pr.fiscal_period
-                ORDER BY pr.value DESC, pr.preference_rank ASC
+                ORDER BY
+                    CASE WHEN pr.collapse_rule = 'preference_rank_asc' THEN pr.preference_rank END ASC,
+                    CASE WHEN pr.collapse_rule = 'value_desc'          THEN pr.value          END DESC,
+                    pr.preference_rank ASC
             ) AS rn
         FROM preference_ranked pr
     ) ranked

@@ -23,11 +23,22 @@
 -- so matched rows never exist at engine level. unique_key acts as a
 -- belt-and-braces safety net.
 --
--- Source: stg_sec_edgar__companyfacts (one row per cik per extract_date,
--- 100 distinct CIKs from the S&P 100 universe). Reading from staging
--- rather than int_sec_edgar__concepts_canonical so the hub contains
--- every CIK that landed in Bronze — independent of whether a given
--- company reported any in-scope XBRL concepts.
+-- Source: stg_sec_edgar__companyfacts (one row per cik per extract_date)
+-- INNER JOINed to sp100_company_sector seed (Phase 5 session 4 Fix-all,
+-- 2026-06-01) to scope the hub to the 107 S&P 100 seed CIKs. Audit 1
+-- A1.2 surfaced 8 Bronze orphans (AIG, CVS, GD, LMT, MET, PLTR, SPG, UBER)
+-- that landed in Bronze via prior backfills but are not in the
+-- 2025-12-31 seed snapshot — they propagated downstream into all 4 marts
+-- (115 = 107 seed + 8 orphans). The seed JOIN at the hub layer drops
+-- them cleanly without removing data from Bronze, restoring the mart
+-- universe to the documented 107-CIK S&P 100 surface.
+--
+-- Architectural decision: filter at the hub rather than at each mart.
+-- Hub-layer universe is the single source of truth for "which companies
+-- belong in this warehouse"; mart-layer filters duplicate the contract
+-- per-mart and drift over time. Bronze is preserved as-is so future
+-- universe expansions (e.g. S&P 500 build) are a seed update, not a
+-- backfill rerun.
 --
 -- Materialization defaults (incremental + iceberg + parquet +
 -- on_schema_change=ignore) live in dbt_project.yml under the warehouse
@@ -42,8 +53,14 @@
 }}
 
 WITH source AS (
-    SELECT DISTINCT cik
-    FROM {{ ref('stg_sec_edgar__companyfacts') }}
+    -- Universe-filtered source. INNER JOIN to sp100_company_sector by cik
+    -- restricts the hub to the 107 seed CIKs. Any CIK present in Bronze
+    -- but absent from the seed (the 8 Audit 1 A1.2 orphans) is dropped
+    -- here before hash computation, so it never enters the warehouse.
+    SELECT DISTINCT s.cik
+    FROM {{ ref('stg_sec_edgar__companyfacts') }} s
+    INNER JOIN {{ ref('sp100_company_sector') }} u
+        ON u.cik = s.cik
 ),
 
 hashed AS (

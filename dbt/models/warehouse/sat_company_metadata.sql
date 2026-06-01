@@ -77,8 +77,14 @@
 }}
 
 WITH source AS (
-    SELECT cik, entity_name
-    FROM {{ ref('stg_sec_edgar__companyfacts') }}
+    -- Universe filter (Phase 5 session 4 Fix-all, 2026-06-01). INNER JOIN
+    -- to sp100_company_sector seed scopes the warehouse to the 107 S&P 100
+    -- CIKs. Mirrors hub_company.sql's universe contract — keeps sat
+    -- company-metadata rows aligned with the universe-scoped hub_company
+    -- so the relationships test passes from sat back to hub.
+    SELECT s.cik, s.entity_name
+    FROM {{ ref('stg_sec_edgar__companyfacts') }} s
+    INNER JOIN {{ ref('sp100_company_sector') }} u ON u.cik = s.cik
 ),
 
 -- DISTINCT collapse per Risk 11 (carry-forward from session 6) and

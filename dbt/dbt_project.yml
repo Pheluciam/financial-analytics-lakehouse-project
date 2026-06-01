@@ -176,6 +176,7 @@ seeds:
         canonical_concept: varchar(64)
         concept_name: varchar(128)
         preference_rank: smallint
+        collapse_rule: varchar(32)
     # sp100_company_sector — cik → GICS sector + industry group reference
     # (Phase 4 session 3, 2026-05-30). Drives the mart_peer_benchmark
     # sector-segment partition cascade (Option A) and surfaces sector as a

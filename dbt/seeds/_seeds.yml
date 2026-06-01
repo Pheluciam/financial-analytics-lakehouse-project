@@ -92,10 +92,46 @@ seeds:
       - name: preference_rank
         description: |
           1-indexed preference rank. 1 = most preferred for the canonical.
-          Tie-breaker only — primary collapse driver in sat_concept_value
-          is value DESC (analyst-correct headline number).
+          Under collapse_rule = 'value_desc' (Risk 47 default), preference_rank
+          is the secondary tie-breaker — primary driver is value DESC.
+          Under collapse_rule = 'preference_rank_asc' (Risk 59 override),
+          preference_rank is the PRIMARY driver — rank 1 wins regardless
+          of value.
         tests:
           - not_null
+
+      - name: collapse_rule
+        description: |
+          Per-canonical override for the sat_concept_value collapsed_observations
+          CTE ORDER BY. Risk 59 fix shipped at Phase 5 session 4 Fix-all
+          (2026-06-01) in response to Audit 5's cash post-Fix simulation.
+
+          Two accepted values:
+          - 'value_desc' = Risk 47 default. ORDER BY value DESC, preference_rank
+            ASC. Correct when multi-tag disagreement reflects an analyst-headline
+            relationship where larger = headline (revenue's ASC 606 alias zoo
+            — legacy Revenues tag carries fractional value alongside the full
+            RevenueFromContractWithCustomer* tag during transition).
+          - 'preference_rank_asc' = canonical-specific override. ORDER BY
+            preference_rank ASC (with value DESC retained as the tertiary
+            tie-breaker after preference_rank). Correct when one tag is a
+            structural SUPERSET of another and the analyst-headline is the
+            narrower bare definition (cash_and_equivalents:
+            CashAndCashEquivalentsAtCarryingValue = bare cash; the Restricted
+            variant CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+            is bare + restricted, always >= bare per FASB ASU 2016-18 — under
+            value_desc the mart would inflate cash by the restricted component
+            for the 45 RESTRICTED_LARGER CIKs surveyed in Audit 5).
+
+          Every row in the seed must carry a value (not_null). The CASE-driven
+          ORDER BY in sat_concept_value.sql collapsed_observations CTE
+          dispatches on this column per-canonical.
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - 'value_desc'
+                - 'preference_rank_asc'
 
   - name: sp100_company_sector
     description: |
