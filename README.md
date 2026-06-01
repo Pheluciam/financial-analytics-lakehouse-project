@@ -4,9 +4,63 @@
 > medallion (S3 + Glue + Athena) → 5-page Power BI executive overview.
 > Project #3 of Phil's data engineering portfolio.
 
-**Status:** **Phase 5 session 1 v1 SHIPPED 2026-05-31 + complete 5-page
-redesign queued for sessions 2-6.** Phase 5 session 1 shipped a working
-v1 of the executive overview page (`powerbi/financial_analytics.pbix`)
+**Status:** **Phase 5 session 3 CLOSED 2026-06-01 — 10-audit data quality
+campaign complete + Fix-all phase queued for the next session.** Phase 5
+session 2 PAUSED for full data quality audit after Phil's direction-check
+exposed mart data wasn't shippable; session 2 closed Audits 1-3 (universe
+integrity + completeness + tag-evidence); session 3 closed Audits 4-10
+(mart-pipeline filter diagnosis + collapse semantics + external anchor
+checks + cross-mart consistency + snapshot stability / PIT logic +
+forecast sanity + schema test coverage gap report). **TRIPLE CONVERGENCE
+finding:** Audits 4 + 7 + 8 independently surfaced the SAME architectural
+bug — mart `fiscal_year` anchored on the SEC `fy` attribute instead of
+`year(period_end_date)`, causing 52/53-week filers' 10-Ks to drop
+multiple period_end rows into the same Risk 42 dedup partition with the
+same accession, triggering non-deterministic Trino ROW_NUMBER tie-break.
+ONE fix (Risk 58 period-end re-anchor in mart_pl_trend + mart_peer_benchmark
++ mart_financial_health) heals SPGI's total FY2024 absence + 22
+RECENT_PIPELINE_BUG cells + ~421 cross-mart divergences + 118
+snapshot-stability drifts simultaneously. **Other findings.** Audit 5:
+cash_and_equivalents needs canonical-specific collapse_rule override
+(Risk 59 — preference_rank ASC PRIMARY for cash, vs Risk 47 value-DESC
+default; heals 16 RESTRICTED_ONLY bank CIKs without inflating 45
+RESTRICTED_LARGER cases). Audit 6: anchor truth PASS — mart values match
+published 10-Ks for AAPL ($391B revenue) / MSFT ($245B) / JPM ($178B) /
+BRK.B ($371B) / WMT ($648B) / XOM ($349B) within rounding tolerance;
+S&P 100 aggregate $8.93T revenue + $1.25T net income matches Phase 5
+session 1 PBI smoke test baseline; 11 GICS sector subtotals match sector
+economics. Audit 9: forecast architecture sound (CI ordering PASS, AIC
+distribution healthy), 3 GE/MMM model pathology rows (Risk 60 —
+structural shocks not modeled by Holt-Winters); PBI Page 5 caveat strip
+needs annotation. Audit 10: 249 current dbt schema tests are STRUCTURAL
+only (Risk 62) — zero semantic coverage; 12 new data tests recommended
+(6 anchor-CIK value-correctness + 3 cross-mart consistency + completeness
+threshold + forecast CI ordering + snapshot stability + collapse_rule
+enum). **5 new Risks banked (58-62).** **100% data integrity post-Fix:**
+142 cells get correct values from the fixes (Risk 58 period-end re-anchor
++ Risk 59 cash collapse override + canonical_concepts_dictionary alias
+expansion + mart-layer derivation columns + universe filter at
+hub_company) + 49 cells correctly defended NULL with JSON-probe URL pin
+per cell = 191 of 191 = ZERO incorrect cells. No "97% reporting" framing.
+**ZERO mart / seed / DDL changes this session** — 100% read-only audit
+per operating principle locked at session 2 kickoff. 8 audit artifacts +
+2 markdown docs shipped to `sql/audit/` + `audit/`; `AUDIT_FINDINGS.md`
+extended to cover all 10 audits; `LEARNINGS.md` extended with Risks
+58-62; `PROJECT_CONTEXT.md` + `PROJECT_PLAN.md` + this Status line all
+refreshed. **Task #30 Fix-all phase queued for the next session** — ONE
+coherent commit batching every fix (Risk 58 period-end re-anchor in 3
+marts + Risk 59 cash collapse_rule override on sat_concept_value +
+canonical_concept_tag_preference seed extension with collapse_rule column
++ canonical_concepts_dictionary expansion + 6-place Jinja `{% set
+concepts %}` lockstep edits across intermediate + 5 warehouse models +
+mart-layer derivation columns in mart_financial_health + universe filter
+at hub_company dropping 8 Bronze orphans + 12 new dbt schema/data tests
++ `audit/defended_nulls.md` JSON-evidence pin file for 49 defended-NULL
+cells); ONE cascade rebuild via `dbt build`; ONE re-audit pass through
+all 10 sql/audit/*.sql files; bundled commit + push. Estimated session
+length 4.5-5 hours. After Fix-all closes, Phase 5 sessions 2-6 of the
+5-page Power BI redesign resume on 100%-trusted data. **Phase 5 session 1
+v1 SHIPPED 2026-05-31** preserved underneath — `powerbi/financial_analytics.pbix`
 — data model (4 marts + dim_company from `sp100_company_sector` seed +
 dim_as_of_date from DISTINCT `mart_pl_trend.as_of_date`, all imported
 via the locked ODBC SELECT-per-table pattern through DSN

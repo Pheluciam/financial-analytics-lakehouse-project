@@ -15,10 +15,10 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 5 session 2 PAUSED for data quality audit 2026-06-01.** Session opened to redesign Page 1 per Risk 57, paused immediately after a single direction-check exposed that the underlying mart data isn't shippable. Phil drove the pivot: data correctness before any PBI authoring; 100% right on what we control, no caveats, no "ship with footnote." Audit framework spun up as `sql/audit/02-04` covering universe integrity, completeness, tag-evidence. Audits 1-3 complete; Audits 4-10 deferred to next session per `AUDITS_4_TO_10_SCOPE.md`. **Key findings.** (1) Bronze cik enum was missing 15 of 107 seed CIKs (Phase 1/2 ingest gap); re-extracted via `extract_sec_edgar.py` and DDL enum extended 100→115 across both Bronze tables. (2) 8 Bronze orphans (AIG, CVS, GD, LMT, MET, PLTR, SPG, UBER — S&P 500 boundary companies) propagating to all 4 marts. (3) 191 missing (CIK × canonical) cells in mart_financial_health at FY2024 latest, classified per recency: 22 RECENT_PIPELINE_BUG (Audit 4 fix), 55 OLD_TAG_RENAME (seed alias expansion), 114 NEVER_IN_SAT (49 truly defended NULL + 65 fillable via mart-layer derivation). (4) SPGI is the canonical test case for the Audit-4 pipeline filter bug — unique CIK with <5 sat rows at (FY2024, FY-period). (5) Marts are internally consistent across the 16-year history (A2.5 PASS all years). (6) Risk 55 was UNDER-scoped: gaps are chronic across all 16 fiscal years, not FY2024-specific. **Theoretical coverage after Fix-all phase:** 142 of 191 cells fillable (74%); 49 documented defended NULL (26%) with JSON evidence per cell. Full findings in `AUDIT_FINDINGS.md`; next-session scope in `AUDITS_4_TO_10_SCOPE.md`. Audit framework files shipped: `sql/audit/02_universe_integrity.sql`, `sql/audit/03_completeness.sql`, `sql/audit/04_tag_evidence.sql`. |
-| Next phase | **Phase 5 session 3 — continue audit framework Audits 4-10** per `AUDITS_4_TO_10_SCOPE.md`. Fresh session to avoid drift. Open with checklist from scope doc; pick up at Audit 4 (mart-pipeline filter diagnosis using SPGI as the canonical test case). After Audits 4-10 close, move to task #30 Fix-all phase: universe filter at hub_company, mart-pipeline bug fix, seed alias expansions per canonical (with Jinja lockstep), mart-layer derivation columns (gross_profit, liabilities, stockholders_equity, cash via Restricted), defended-NULL evidence pinning, schema test additions, cascade rebuild, re-run all 10 audits. Then resume Phase 5 session 2 Page 1 design call on data we trust 100%. |
-| Last session closed | 2026-06-01 (Phase 5 session 2 — data quality audit pivot; Audits 1-3 complete; AUDIT_FINDINGS.md + AUDITS_4_TO_10_SCOPE.md shipped; Bronze cik enum extended 100→115; 15 seed CIKs backfilled to Bronze; dbt cascade rebuilt clean) |
-| Last bundled commit | 2026-06-01 — Phase 5 session 2 audit-pivot bundle |
+| Active phase | **Phase 5 session 3 CLOSED 2026-06-01 — all 10 audits closed; Fix-all phase queued.** Session opened from session 2's audit-pivot pause and walked Audits 4-10 to completion. **TRIPLE CONVERGENCE finding:** Audits 4 (mart-pipeline filter), 7 (cross-mart consistency), 8 (snapshot stability) independently surfaced the SAME root cause — mart `fiscal_year` anchored on SEC `fy` attribute instead of `year(period_end_date)`, causing 52/53-week filers' 10-Ks to put multiple period_end rows in the same Risk 42 dedup partition with the same accession, triggering non-deterministic ROW_NUMBER tie-break (Risk 61). ONE fix (Risk 58 period-end re-anchor) heals SPGI's total FY2024 absence + 22 RECENT_PIPELINE_BUG + ~421 cross-mart divergences + 118 snapshot drifts simultaneously. **Other findings.** Audit 5: cash_and_equivalents needs canonical-specific collapse_rule override (Risk 59 — preference_rank ASC PRIMARY; heals 16 RESTRICTED_ONLY banks without inflating 45 RESTRICTED_LARGER). Audit 6: anchor truth PASS — mart values match published 10-Ks for AAPL/MSFT/JPM/BRK.B/WMT/XOM within rounding; S&P 100 aggregate $8.93T revenue + $1.25T net income matches Phase 5 session 1 PBI baseline. Audit 9: forecast architecture sound; 3 GE/MMM model pathology rows (Risk 60 structural shocks not modeled). Audit 10: 249 current dbt schema tests are STRUCTURAL only (Risk 62); 12 new data tests recommended for Fix-all phase. **100% data integrity post-Fix:** 142 cells correct values + 49 cells defended-NULL with JSON-probe URL pin = 191 of 191 = ZERO incorrect cells. **Files shipped:** `sql/audit/05` through `sql/audit/11` + `audit/anchor_truth.md` + extended `AUDIT_FINDINGS.md` + `LEARNINGS.md` Risks 58-62. ZERO mart/seed/DDL changes — 100% read-only audit per the locked operating principle. |
+| Next phase | **Task #30 Fix-all phase, next session.** One coherent commit: Risk 58 period-end re-anchor (mart_pl_trend + mart_peer_benchmark + mart_financial_health) + Risk 59 cash collapse_rule override (sat_concept_value + canonical_concept_tag_preference seed extension with collapse_rule column) + canonical_concepts_dictionary expansion (Restricted cash, SEIncludingNCI, MinorityInterest, LiabAndSE, CostOfRevenue variants, Financials revenue tags) + 6-place Jinja `{% set concepts %}` lockstep edits + mart-layer derivation columns in mart_financial_health (gross_profit = rev − cost; liabilities = LiabAndSE − SE; SE = SEIncludingNCI − MinorityInterest; cash via Restricted alias) + universe filter at hub_company (drop 8 Bronze orphans) + 12 new dbt schema/data tests + `audit/defended_nulls.md` JSON-evidence pin file (49 cells). ONE cascade rebuild via `dbt build`. ONE re-audit pass through all 10 sql/audit/*.sql files. Bundled commit + push. Estimated session length: 4.5-5 hours. After Fix-all closes: resume Phase 5 session 2 Page 1 design call on 100%-trusted data. |
+| Last session closed | 2026-06-01 (Phase 5 session 3 — Audits 4-10 closed; full 10-audit campaign complete; TRIPLE CONVERGENCE finding banked; 8 audit artifacts + 2 markdown docs shipped; LEARNINGS.md extended with Risks 58-62; AUDIT_FINDINGS.md extended to cover all 10 audits) |
+| Last bundled commit | 2026-06-01 — Phase 5 session 3 audit-campaign-close bundle |
 | Active blockers | None |
 | Open questions | Phase 6 CI/CD forward-verify still deferred. Risk 55 dbt-side fix (canonical_concept_tag_preference seed expansion + 6-place Jinja concept-list lockstep edits across intermediate + 5 warehouse models + cascade rebuild) deferred to a dedicated Phase 6 mapping-expansion session — 2-4 hour scope, out of Phase 5 cadence; documented in `POWERBI_PIPELINE.md` section 4 + carried on every page footer caveat strip. Risk 56 forecast horizon handling deferred to Phase 5 session 5 (Page 5 Growth/Forecast) where the per-company horizon is made explicit to viewers via a dedicated metadata panel + clip-at-FY2027 option for aggregate trajectory. Per-company tag-preference override at sat_concept_value (Risk 49 targeted fix) → deferred enhancement, narrow benefit. Forecast canonical expansion to net_income / operating_income → future targeted forecast-extension session. 6-place hardcoded Jinja `{% set concepts %}` duplication across intermediate + 5 warehouse models → refactor to seed-driven macro deferred (becomes more attractive once Risk 55 mapping expansion lands and the duplication burden visibly compounds). dbt-core version disparity between requirements.txt (1.10.x) and Glue `--additional-python-modules` pin (1.9.10) noted at session 5 prep — cosmetic, both work; reconcile at Phase 6 polish. Phase 5 session 2 onwards: 5-page redesign per POWERBI_PIPELINE.md section 3, one page per session. |
 
@@ -88,6 +88,78 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-06-01 — Phase 5 session 3 — Audits 4-10 CLOSED — 10-audit campaign complete — TRIPLE CONVERGENCE finding (Risk 58 period-end re-anchor heals Audits 4 + 7 + 8) — Risks 58-62 banked — Fix-all phase queued
+
+**Goal.** Continue the audit framework from Phase 5 session 2 (Audits 1-3 closed; Audits 4-10 queued per `AUDITS_4_TO_10_SCOPE.md`). Walk each audit one query at a time per the locked step-by-step pattern. Close each audit with its finding banked at the SQL file's closing block. Ship no model / seed / DDL changes — 100% read-only audit phase per operating principle.
+
+**What landed.**
+
+- **Audit 4** — `sql/audit/05_pipeline_filter_diagnosis.sql`. ROOT CAUSE confirmed at SPGI test case: mart_financial_health.sql line 190 filter `year(period_end) IN (fy, fy+1)` rejects prior-year comparative rows. SPGI's 2024-12-31 data is in sat tagged fy=2025 (from FY2025 10-K + 2025 10-Qs); filter rejects 2024 NOT IN (2025, 2026). FIX SHAPE documented: re-anchor mart fiscal_year on year(period_end_date) instead of SEC fy attribute.
+- **Audit 5** — `sql/audit/06_collapse_semantics.sql`. A5.1 verified Risk 47 collapse for revenue (10 multi-tag-disagree CIKs all picked analyst-headline). A5.2 simulated cash post-Fix alias addition: 16 RESTRICTED_ONLY CIKs heal; 45 RESTRICTED_LARGER CIKs would inflate worst PYPL +241%, ADP +246%, SCHW +56% under Risk 47 default. FIX SHAPE: canonical-specific `collapse_rule = 'preference_rank_asc'` override for cash; revenue keeps `value_desc` default. Scorecard for all 9 mart-active canonicals banked.
+- **Audit 6** — `sql/audit/07_external_anchors.sql` + `audit/anchor_truth.md` (anchor values + SEC EDGAR + corporate IR source URLs verified via web 2026-06-01). All 6 anchor CIKs MATCH within 0.5% tolerance on revenue + net_income. S&P 100 aggregate $8.93T revenue + $1.25T net income matches Phase 5 session 1 PBI smoke test baseline. Sector subtotals match GICS sector economics across all 11 sectors. PASS — warehouse correctly anchored vs published 10-Ks.
+- **Audit 7** — `sql/audit/08_cross_mart_consistency.sql`. ~421 divergent (cik, fy) rows across 6 cross-mart checks. Snapshot-drift hypothesis REJECTED (all marts share same as_of_date grid). Drilldown to WMT FY2012 sat probe confirmed root cause: 52/53-week filers' 10-Ks tag both current-year and prior-year comparatives under the same fy + same accession; both pass year-IN filter; Risk 42 dedup ORDER BY accession_number DESC produces tie; Trino ROW_NUMBER tie-break is non-deterministic. SAME root cause as Audit 4. ONE fix (period-end re-anchor) heals both.
+- **Audit 8** — `sql/audit/09_snapshot_consistency.sql`. 123 of 3167 (cik, fy, canonical) tuples drift across as_of_dates. Drilldown split: 118 (96%) are the SAME 52/53-week filer dedup non-determinism as Audit 7; 5 (4%) are real restatements (ELV/HON/KHC publicly-documented) — PIT working as designed. A8.3 latest-snapshot uniqueness PASS (3167 = 3167 distinct).
+- **Audit 9** — `sql/audit/10_forecast_sanity.sql`. 336 forecast rows. A9.1 CI ordering PASS. A9.2 5 outliers (NVDA 2027/2028 aggressive AI growth = plausible; GE 2027 + MMM 2026/2027 = MODEL PATHOLOGY from divestiture-driven decline misread as gradual trend). A9.3 AIC distribution PASS. A9.4 2 stale-cohort CIKs (MS + WFC) heal via Risk 55 seed expansion. No forecast code fix; PBI Page 5 caveat strip needs structural-events annotation.
+- **Audit 10** — `sql/audit/11_schema_test_coverage.md`. 249 current dbt schema tests are STRUCTURAL only (hash uniqueness, FK closure, not-null, accepted_values, composite PK). Zero semantic coverage — none would catch the 191-cell gap matrix from Audit 3. 12 new tests recommended for Fix-all (6 anchor-CIK value-correctness, 3 cross-mart consistency, 1 completeness threshold, 1 forecast CI ordering, 1 snapshot stability, 1 collapse_rule enum, 3 generic range tests on ratios). Post-Fix expected: 261/261.
+
+**TRIPLE CONVERGENCE finding (the headline of this session).** Audits 4 + 7 + 8 independently surfaced the SAME root cause from three different diagnostic angles. The fix lands as ONE coherent edit:
+- Drop `year(scv.period_end_date) IN (scv.fiscal_year, scv.fiscal_year + 1)` filter from mart_pl_trend.sql + mart_peer_benchmark.sql + mart_financial_health.sql.
+- Change Risk 42 dedup PARTITION BY from `fiscal_year` to `year(period_end_date)` in all 3 marts.
+- Change projection / pivot GROUP BY from `fiscal_year` to `year(period_end_date) AS fiscal_year`.
+- Risk 48 conditional span filter preserved in mart_financial_health.
+- ONE fix heals: SPGI total FY2024 absence + 22 RECENT_PIPELINE_BUG cells + ~421 cross-mart divergences + 118 snapshot-stability drifts + makes Risk 42 dedup deterministic by construction.
+
+**100% data integrity post-Fix.** 142 of 191 cells get correct values from the fixes (Audit 4 mart pipeline + Audit 5 cash collapse override + Audit 3 seed expansion + Audit 3 mart-layer derivation + Audit 1 universe filter). The remaining 49 cells are correctly defended NULL with JSON-probe URL pin per cell documenting "company X doesn't file concept Y under any us-gaap tag — verified." ZERO incorrect cells. No "97%" framing — 191 of 191 cells are accounted for, either valued or evidenced-NULL.
+
+**Risks 58-62 banked.**
+- **Risk 58** — Mart fiscal_year anchored on SEC fy attribute (the architectural bug; Audits 4+7+8 triple convergence).
+- **Risk 59** — Canonical-specific collapse_rule override needed for cash (Audit 5).
+- **Risk 60** — Forecast model pathology on structural shocks (Audit 9 GE/MMM cases; documentation-only fix).
+- **Risk 61** — Risk 42 dedup tie-break non-determinism under Trino ROW_NUMBER (Audit 7 mechanism; subsumed by Risk 58 fix).
+- **Risk 62** — dbt schema test layer is structural only; semantic-test gap (Audit 10; 12 new data tests at Fix-all).
+
+**Files shipped this session.**
+- `sql/audit/05_pipeline_filter_diagnosis.sql` NEW (Audit 4).
+- `sql/audit/06_collapse_semantics.sql` NEW (Audit 5 + per-canonical scorecard).
+- `sql/audit/07_external_anchors.sql` NEW (Audit 6).
+- `audit/anchor_truth.md` NEW (Audit 6 anchor values + source URLs).
+- `sql/audit/08_cross_mart_consistency.sql` NEW (Audit 7).
+- `sql/audit/09_snapshot_consistency.sql` NEW (Audit 8).
+- `sql/audit/10_forecast_sanity.sql` NEW (Audit 9).
+- `sql/audit/11_schema_test_coverage.md` NEW (Audit 10 — markdown coverage report).
+- `AUDIT_FINDINGS.md` extended to cover Audits 4-10 + consolidated strategic-implications table.
+- `LEARNINGS.md` extended with Risks 58, 59, 60, 61, 62 + Phase 5 session 3 audit-campaign close section.
+- `PROJECT_CONTEXT.md` — current status table refreshed; this session log entry appended.
+- `PROJECT_PLAN.md` section 9 — Phase 5 row refreshed (session 3 audit-campaign-close shipped).
+- `README.md` Status line refreshed.
+
+**Decisions locked this session.**
+
+- **Period-end re-anchor as the canonical fix.** Risk 58. ONE edit to 3 marts.
+- **collapse_rule column added to canonical_concept_tag_preference seed.** Risk 59. cash gets preference_rank_asc; revenue keeps value_desc default.
+- **Fix-all phase is ONE coherent commit.** No partial fixes, no per-fix cascades. Bundled at end of next session.
+- **Re-audit pass after Fix-all = ONE pass through all 10 audit files.** Bounded. Estimated 90 min.
+- **PBI Page 5 caveat strip will explicitly annotate forecast structural-shock limitation.** Risk 60 documentation fix.
+- **100% data integrity standard means 142 valued + 49 defended-NULL with JSON evidence = 191 of 191.** No "97% reporting" framing.
+
+**Blockers / surprises.** Several mid-session pivots, all absorbed:
+
+1. **Mid-session schema speculation failure.** First Audit 4 query A4.1.a used a column (`accn`) that doesn't exist on `stg_sec_edgar__companyfacts_raw`. Phil flagged this hard. Process fix: every audit SQL file now ships with a SCHEMA REFERENCE header listing every (table.column) used + source dbt model file path; every column ground-truthed against the model SQL before the query is written.
+2. **Triple convergence wasn't anticipated at audit-campaign kickoff.** Audits 4, 7, 8 were scoped as independent investigations of independent failure modes. The shared root cause emerged across them. Strong validation signal for the period-end re-anchor fix.
+3. **A9 scorecard JOIN multiplicity inflated stale-cohort count.** Audit query's latest_hist_per_cik CTE multiplied forecast rows by historical-as-of-date count. Drilldown surfaced the inflation; true count is 2 CIKs × 3 forecast years = 6 unique forecast rows (not 48). Documented in Audit 9 closing block as audit-query-side bug; mart unaffected.
+4. **Phil's "97% coverage" pushback.** Original framing of "97% reporting + 49 defended-NULL" was misleading. Corrected mid-session: actual data integrity is 100% — 142 valued + 49 defended-NULL-with-evidence = 191 of 191. No caveat language.
+
+**NOT in this session — deferred.**
+
+- **Fix-all phase (task #30)** → next session.
+- **Re-audit pass** → after Fix-all, same session as Fix-all.
+- **Resume Phase 5 session 2 Page 1 design call** → after Fix-all + re-audit pass.
+- **Phase 6 CI/CD forward-verify** → Phase 5 close.
+
+**Next session.** Task #30 Fix-all phase. Cold restart with full context from this session's doc updates. Open with the Fix-all kickoff prompt provided at this session's end. Implement all queued fixes in one coherent commit; cascade rebuild; re-run all 10 audit SQL files; verify everything heals; bundled commit + push. Estimated 4.5-5 hours.
+
+---
 
 ### 2026-06-01 — Phase 5 session 2 — PAUSED for full data quality audit pivot — Audits 1-3 complete + 15-CIK Bronze gap closed + 191-cell missing matrix classified + AUDIT_FINDINGS.md + AUDITS_4_TO_10_SCOPE.md shipped
 

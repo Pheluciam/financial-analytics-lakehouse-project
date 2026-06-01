@@ -982,6 +982,73 @@ Phase 5 session 1 shipped a working v1 of the executive overview page (data mode
 
 **Carry-forward.** Phase 5 sessions 2-6 each open with a 1-page design call (what the page needs to show, what visuals encode what, what makes this page distinctive vs Projects #1 and #2) BEFORE any PBI clicks. The design call output gets banked in POWERBI_PIPELINE.md as the session's pre-implementation spec. Implementation iterates against the spec, not against the rendered output. **Senior-DE pattern reinforced from Project #2 Risk family E ("design BEFORE you build, especially when the output is visual"):** the visual layer is the easiest place to drift, hardest place to spot the drift, and most expensive place to recover from the drift.
 
+#### Risk 58 — Mart fiscal_year anchored on SEC fy attribute instead of year(period_end_date): 52/53-week filers' 10-Ks tag both current-year and prior-year comparatives under the same fy, breaking the mart partition assumption (banked 2026-06-01, Phase 5 session 3, Audits 4 + 7 + 8 TRIPLE convergence)
+
+**Discovered during Phase 5 session 3 audit campaign.** Audit 4 surfaced it at the SPGI test case (SPGI's standalone FY2024 10-K absent from companyfacts JSON; 2024-12-31 data exists only as comparative under fy=2025 filings; `year(period_end) IN (fy, fy+1)` filter at `mart_financial_health.sql` line 190 rejects 2024 NOT IN (2025, 2026)). Audit 7 surfaced the same root cause as ~421 cross-mart divergences (52/53-week retailers WMT/HD/TGT/LOW/TJX/NVDA/CRM/JNJ with one 10-K reporting two period_end rows tagged the same fy + same accession). Audit 8 surfaced the same root cause as 118 snapshot-stability drifts.
+
+**Root cause.** SEC EDGAR XBRL `fy` attribute uses period-START-year convention for 52/53-week filers — a WMT 10-K with period_start=2012-02-01 + period_end=2013-01-31 carries fy=2012 in XBRL despite WMT internally calling it "Fiscal 2013." The same 10-K then reports prior-year comparative rows tagged fy=2012 with period_end=2012-01-31. Both rows pass the mart's year-IN filter. Risk 42 dedup `ORDER BY accession_number DESC` produces a tie (same accession). Trino ROW_NUMBER tie-break is non-deterministic per partition → cross-mart divergence + snapshot drift + SPGI total absence.
+
+**Triage / fix shape.** Re-anchor mart `fiscal_year` on `year(period_end_date)` instead of the SEC `fy` attribute. Specific edits to `mart_financial_health.sql` + `mart_pl_trend.sql` + `mart_peer_benchmark.sql`: drop the year-IN filter; change Risk 42 dedup partition from `fiscal_year` to `year(period_end_date)`; change projection / pivot GROUP BY from `fiscal_year` to `year(period_end_date) AS fiscal_year`. Risk 48 conditional span filter preserved. ONE fix heals Audits 4 + 7 + 8 simultaneously.
+
+**Carry-forward.** When XBRL or SEC-anchored data drives a mart's grain, NEVER anchor on the source's internal fiscal-year attribute — anchor on the period_end_date the value covers. Source attributes follow filer-specific naming conventions that the data engineer cannot ground-truth without per-CIK probes. Calendar-year-of-period-end is universal across all 11 GICS sectors and matches analyst-facing interpretation.
+
+#### Risk 59 — Canonical-specific collapse_rule override needed for cash_and_equivalents: Risk 47 value-DESC PRIMARY inflates by Restricted-cash component when the alias is added (banked 2026-06-01, Phase 5 session 3, Audit 5)
+
+**Discovered during Phase 5 session 3 Audit 5 cash post-Fix simulation.** Audit 3 identified that 16 CIKs (mostly banks: JPM, BAC, C, WFC, USB, PNC, COF, BRK.B, AXP + GE, GILD, PG, CVX, INTC, MMM, TGT) file only the Restricted-cash variant tag (`CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents`) and need it added as an alias for `cash_and_equivalents`. Audit 5 simulated the post-Fix collapse: 45 OTHER CIKs file BOTH the bare `CashAndCashEquivalentsAtCarryingValue` AND the Restricted variant, with the Restricted variant always >= bare by the FASB definition. Under Risk 47 value-DESC PRIMARY, the mart would pick Restricted, inflating cash by the restricted-cash component. Worst cases: PYPL +$15.8B (241% over bare), ADP +$7.2B (246%), SCHW +$23.4B (56%), INTU +$3.5B (197%).
+
+**Root cause.** Risk 47's "value-DESC = analyst-headline" heuristic is correct for revenue (where multi-tag disagreement reflects ASC 606 transition partials vs full reported revenue, larger = headline) but is WRONG for cash, where the Restricted variant is a strict SUPERSET and the analyst-headline is the BARE tag.
+
+**Triage / fix shape.** Extend `canonical_concept_tag_preference.csv` with a `collapse_rule` column. Values: `value_desc` (Risk 47 default, keep for revenue + future multi-tag canonicals where larger = headline) and `preference_rank_asc` (override — preference_rank 1 wins regardless of value; for cash_and_equivalents). Switch `sat_concept_value.sql` `collapsed_observations` CTE ORDER BY to a CASE on collapse_rule. Cash seed rank 1 = bare, rank 2 = Restricted. Heals 16 RESTRICTED_ONLY CIKs without inflating the 45 RESTRICTED_LARGER cases.
+
+**Carry-forward.** When adding a tag alias to a canonical's preference list, the FIRST question is "what's the semantic relationship between the new tag and the existing tag?" Three patterns:
+1. **Alternative-tags-same-concept** (revenue's 4 alias tags during ASC 606 transition) → value-DESC is right; pick the analyst-headline.
+2. **Superset-of-existing** (Restricted cash = bare cash + restricted component) → preference_rank ASC is right; pick the narrower bare definition.
+3. **Derivation-source** (CostOfRevenue used to derive gross_profit) → not collapse semantics; mart-layer derivation column.
+
+The `collapse_rule` column makes the choice explicit per canonical. Default = value_desc; override = preference_rank_asc for superset cases.
+
+#### Risk 60 — Forecast model pathology on structural shocks: Holt-Winters extrapolates spinoff / divestiture revenue declines as gradual trend (banked 2026-06-01, Phase 5 session 3, Audit 9)
+
+**Discovered during Phase 5 session 3 Audit 9 forecast sanity scorecard.** 3 of 336 forecast rows showed implausibly low forecast_value relative to latest historical: GE 2027 (0.42x of $38.7B FY2024 = $16.2B forecast vs analyst consensus ~$40B), MMM 2026 (0.42x of $24.6B = $10.3B vs ~$23B), MMM 2027 (0.13x = $3.1B vs ~$22B). Both companies underwent major divestitures in 2024 (GE: GE Vernova + GE HealthCare separations; 3M: fiber optics + food safety). The historical revenue trajectory captured the structural step-downs; Holt-Winters Exponential Smoothing additive trend read those steps as continuous decline and projected forward.
+
+**Root cause.** Univariate forecasting (statsmodels.tsa Holt-Winters, ARIMA) operates on the revenue time series alone — no awareness of whether a historical change was a continuous trend OR a one-time structural event. Spinoffs/divestitures appear in the data as a single-period revenue drop, indistinguishable mathematically from one period in a continuing decline trend.
+
+**Triage / fix shape.** No code fix in scope — handling structural breaks requires intervention analysis / structural-break detection (heavy-weight for portfolio scope) or per-company manual override lists. Documentation fix only: PBI Page 5 caveat strip annotation "Forecasts are 3-year Holt-Winters / ARIMA projections; structural events (spinoffs, divestitures, M&A) are not modeled. Forecasts for GE, MMM, and other post-divestiture filers should be interpreted accordingly." Flag the 5 outlier forecast rows via a CASE column on mart_growth_forecast at Fix-all phase.
+
+**Carry-forward.** When publishing per-company forecasts derived from purely-historical univariate models, an explicit caveat about structural breaks is non-optional. The model's silence on the pathology becomes a viewer's interpretation error if the caveat is missing. For future projects involving forecasting: build a "structural events" seed early if any company in scope has had a spinoff/M&A in the historical window.
+
+#### Risk 61 — Risk 42 dedup tie-break non-determinism under Trino ROW_NUMBER: same-accession multiple period_end rows pass the mart filter; ORDER BY accession_number DESC produces a tie (banked 2026-06-01, Phase 5 session 3, Audit 7 mechanism; subsumed by Risk 58 fix)
+
+**Discovered during Phase 5 session 3 Audit 7 cross-mart drilldown.** WMT FY2012 sat probe revealed both `period_end=2012-01-31` ($446.95B, WMT's FY2012 actual) and `period_end=2013-01-31` ($469.16B, WMT's FY2013 current-year-tagged-fy=2012-by-XBRL) share the same accession `0000104169-13-000011`. Both pass mart filters. Risk 42 dedup ORDER BY accession_number DESC → both rows have the same accession → tie. Trino ROW_NUMBER tie-break is non-deterministic per partition. mart_pl_trend picked $469B; mart_financial_health picked $447B. ~421 cross-mart divergent rows across 6 checks.
+
+**Root cause.** Trino's ROW_NUMBER documentation: "If ORDER BY produces ties, the ordering among tied rows is unspecified." Two rows sharing identical PARTITION BY columns AND ORDER BY values can be ranked 1-vs-2 in either order, with the choice unstable across partitions in the same query. Different as_of_date partitions resolve the tie differently → snapshot-stability drift (Audit 8) + cross-mart divergence (Audit 7).
+
+**Triage / fix shape.** Risk 58 period-end re-anchor structurally resolves this — when fiscal_year is derived from year(period_end_date), the two rows fall into DIFFERENT partitions, and the tie cannot occur. NO separate Risk 61 fix needed. Defensive belt-and-braces: extend dedup `ORDER BY accession_number DESC, period_end_date DESC` even after Risk 58 fix lands, since accession_number DESC remains the primary intent.
+
+**Carry-forward.** Whenever a dedup ORDER BY column can produce ties under any realistic data distribution, the dedup contract must include a deterministic secondary tie-breaker. General pattern: every ROW_NUMBER ORDER BY should include enough columns that ties are mathematically impossible under any real data distribution; otherwise the dedup is silently non-deterministic.
+
+#### Risk 62 — dbt schema test layer is STRUCTURAL ONLY: zero semantic coverage of completeness, cross-mart consistency, value sanity, snapshot stability, collapse semantics, forecast plausibility (banked 2026-06-01, Phase 5 session 3, Audit 10)
+
+**Discovered during Phase 5 session 3 Audit 10 schema-test inventory.** 249 current dbt schema tests across 4 layers (intermediate, warehouse, business_vault, marts). All 249 passing. ZERO of them caught any cell in the 191-cell gap matrix from Audit 3. Audit 4-8 architectural bugs (period-end anchor mismatch, dedup non-determinism, cross-mart divergence, snapshot drift) all pass current tests cleanly.
+
+**Root cause.** Current tests verify SHAPE (hash uniqueness, FK closure, not-null, accepted_values, composite PK). They don't verify VALUES (anchor truth, cross-mart agreement, completeness thresholds, range sanity, semantic consistency). The audit campaign filled this gap manually; production-grade test coverage must bake the audit findings into the dbt test suite.
+
+**Triage / fix shape.** Add 12 new dbt tests in Fix-all phase: 6 anchor-CIK value-correctness data tests (AAPL/MSFT/JPM/BRK.B/WMT/XOM at FY2024), 3 cross-mart consistency data tests (revenue + net_income + assets divergence = 0), 1 completeness threshold on mart_financial_health.revenue, 1 forecast CI ordering test, 1 snapshot stability test (allow 5 real restatements, fail on dedup-bug drift), 1 collapse_rule enum test on canonical_concept_tag_preference, plus 3 generic dbt_expectations range tests on net_margin / ROA / growth_ratio. Post-Fix expected: 261/261 dbt schema tests passing.
+
+**Carry-forward.** Schema tests = STRUCTURAL contract. Data tests = SEMANTIC contract. Both required for production-grade warehouses. The bug class that motivates data tests = "the warehouse passes 249/249 structural tests AND ships wrong values to the dashboard." From this project onward: every architectural audit finding gets a paired data test added at fix time. The audit becomes the test suite specification.
+
+---
+
+### Phase 5 session 3 audit campaign — Audits 1-10 closed (banked 2026-06-01)
+
+Phase 5 session 3 closed the 10-audit data quality framework started in Phase 5 session 2. Audits 1-3 ran prior session; Audits 4-10 ran this session. 5 new architectural Risks banked (58-62 above). 8 audit SQL artifacts + 1 anchor-truth markdown + 1 schema-test coverage markdown shipped to `sql/audit/` + `audit/`.
+
+**TRIPLE CONVERGENCE finding.** Audits 4 + 7 + 8 independently surfaced the same root cause (SEC fy attribute anchor for 52/53-week filers + Risk 42 dedup non-determinism). ONE fix (Risk 58 period-end re-anchor) heals ~561 affected (cik, fiscal_year, canonical) tuples across the three audits.
+
+**FIX-ALL phase queued.** One coherent commit: period-end re-anchor (3 marts) + cash collapse_rule override (sat_concept_value + seed extension) + seed alias expansion (canonical_concepts_dictionary + 6-place Jinja lockstep) + mart-layer derivation (gross_profit / liabilities / SE / cash) + universe filter (hub_company) + 12 new dbt schema/data tests + defended-NULL JSON-evidence pin file. ONE cascade rebuild. ONE re-audit pass through all 10 audit files. Bounded.
+
+**Operating principle held throughout.** ZERO mart / seed / DDL / dbt model changes during audit phase. 100% read-only investigation per lock at session 2 kickoff. All findings banked at each audit's closing block in the respective `sql/audit/*.sql` file.
+
 ---
 
 ### Phase 3 reflection — 14 Risks rolled into six pattern families (banked 2026-05-29, Phase 3 session 14 close)
