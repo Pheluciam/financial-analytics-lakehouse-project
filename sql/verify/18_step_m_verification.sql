@@ -6,7 +6,7 @@
 -- into Athena Query Editor under workgroup wg_financial_analytics signed
 -- in as phil-admin, region us-east-1.
 --
--- Stacks 38 PASS/FAIL invariants covering all 10 audits' assertions plus
+-- Stacks 48 PASS/FAIL invariants covering all 10 audits' assertions plus
 -- the 2 fix-amendments (Risk 66 bridge_fy fp filter relaxation; Risk 67
 -- forward as_of_date 2026-06-01 in dim_as_of_dates). One result set,
 -- one truth surface.
