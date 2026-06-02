@@ -577,76 +577,75 @@ Text box at top: "S&P 100 financial executive overview". Font: 18px, weight 500.
 
 ### 6.1 Purpose
 
-15-year P&L trend analysis: revenue + net income trajectories, sector composition over time, per-sector small multiples, margin heatmap.
+15-year P&L story: macro revenue × net income trajectory + headline year/margin callouts + per-sector net margin trend lines. 3 visual containers (combo, KPI panel, line chart). Filterable interactively by Sector slicer.
 
-### 6.2 Slicers (top of page)
+**Visual budget: 4 max per page** (project standing constraint locked session 6). Page 2 ships with 3 visuals + footer caveat.
 
-- `dim_company[gics_sector]` — multi-select dropdown.
-- `mart_pl_trend[fiscal_year]` — range slider, default 2009-2024.
+### 6.2 Slicers (header strip)
 
-### 6.3 Row 1 — Dual-axis revenue + net income (~2/3 width)
+- Date Range — `dim_as_of_date[as_of_date]` (synced from Page 1).
+- Sector — `dim_company[gics_sector]` (synced from Page 1).
+- Fiscal Year — `dim_fiscal_year[fiscal_year]` range slider, default 2009-2024. Page 2 only — NOT synced.
 
-Visual: **Line and clustered column chart** (combo).
+### 6.3 Page-level filter
+
+`dim_fiscal_year[fiscal_year]` between 2009 and 2024 applied at **Filters on this page**. Every visual on the page inherits — no per-visual fiscal_year filter needed.
+
+### 6.4 Row 1 left — Dual-axis revenue + net income combo (~2/3 width)
+
+Visual: **Line and clustered column chart**.
 
 Field wells:
-- X-axis: `mart_pl_trend[fiscal_year]`.
-- Column y-axis: `[Revenue All Years]` (defined above).
-- Line y-axis: `[Net Income All Years]` (build this measure, same pattern as Revenue All Years but for net_income).
+- X-axis: `dim_fiscal_year[fiscal_year]` (conformed dim, not the raw mart column).
+- Column y-axis: `[Revenue All Years]`.
+- Line y-axis: `[Net Income All Years]`.
 
 Format:
-- Column: solid blue, no gradient.
-- Line: solid teal, 2px stroke, marker on each data point.
-- Both Y-axes visible with units in billions.
+- Both Y-axes set to Display units = Trillions, Decimal places = 1.
+- Y-axis titles Off (legend + tick units carry the encoding).
+- Line: marker = circle, stroke 2-3px.
+- Both measures renamed in this visual to "Revenue" and "Net Income" via the field-well rename (preserves the underlying measure name elsewhere).
 
-Title: "Revenue (bars) and net income (line), FY2009-2024".
+Title: "S&P 100 revenue and net income, FY2009-2024".
 
-### 6.4 Row 1 — KPI callouts panel (~1/3 width)
+### 6.5 Row 1 right — KPI callouts (~1/3 width)
 
-Three stacked text boxes (not Card visuals) showing:
-- Best revenue year: max fiscal_year by revenue.
-- Worst revenue year: min by revenue YoY %.
-- Margin trend: average net_margin over the window.
+Three stacked text boxes (NO Card visuals — project-level lock). Each uses the PBI text-box dynamic value feature (+ Value button on the formatting toolbar). Required field: "Name your value" (Save greys out until populated — documented PBI quirk).
 
-Use DAX measures to drive each text-box value. Build these on _Measures:
+| Label (above value, ~10pt grey) | Measure inserted via + Value |
+|---|---|
+| Best year | `[Best Revenue Year]` |
+| Worst year | `[Worst Revenue Year]` |
+| Avg net margin | `[Avg Net Margin]` |
 
-```dax
-Best Revenue Year = 
-CALCULATE(MAX(mart_pl_trend[fiscal_year]),
-          TOPN(1, VALUES(mart_pl_trend[fiscal_year]),
-               CALCULATE(SUM(mart_pl_trend[value_numeric]),
-                         mart_pl_trend[canonical_concept] = "revenue"), DESC))
-```
+Value text: 16-24pt bold black.
 
-### 6.5 Row 2 — Sector-mix stacked area chart (full width)
+### 6.6 Row 2 — Net margin trend lines per sector (full width)
 
-Visual: **Stacked area chart**.
+Visual: **Line chart**.
 
 Field wells:
-- X-axis: `mart_pl_trend[fiscal_year]`.
-- Y-axis: `[Revenue All Years]`.
-- Legend: `dim_company[gics_sector]`.
+- X-axis: `dim_fiscal_year[fiscal_year]`.
+- Y-axis: `[Sector Net Margin]`.
+- Legend: `dim_company[gics_sector]` (11 colored lines).
 
-Title: "Revenue composition by sector over time".
+Format:
+- Y-axis: Display units = None, Decimal places = 1 (renders as % via measure format).
+- Markers On, shape = circle.
 
-### 6.6 Row 3 — Per-sector small multiples (full width)
+Title: "Net margin trend by sector, FY2009-2024".
 
-Visual: **Line chart** with PBI's Small Multiples feature.
+Interactivity: Sector slicer narrows to selected sectors; with All, viewer sees all 11 colored lines for cross-sector comparison.
 
-Field wells:
-- X-axis: `mart_pl_trend[fiscal_year]`.
-- Y-axis: `[Revenue All Years]`.
-- Small multiples: `dim_company[gics_sector]` (renders one mini chart per sector, 11 panels).
+### 6.7 What was tried and dropped (rationale for the simplification)
 
-### 6.7 Row 4 — Net margin heatmap (full width)
+The earlier 4-row plan (combo + KPIs + stacked area + small multiples + heatmap) was over-dense. Tried and dropped during session 6:
 
-Visual: **Matrix** with conditional formatting on cell background.
+- **Stacked area with 11 sectors**: 11 thin bands at similar magnitudes, indistinguishable; legend wrapped across full width.
+- **11-sector small multiples grid**: panel sizes ≤80×165 px crushed readability; sector titles failed to render reliably across PBI Desktop variants.
+- **Net margin heatmap matrix**: 11×16 cells at half-canvas width too cramped; cell numeric values clashed with color encoding.
 
-Field wells:
-- Rows: `dim_company[gics_sector]`.
-- Columns: `mart_pl_trend[fiscal_year]`.
-- Values: `[Sector Net Margin]` (build this — same pattern as Sector Revenue but for net_margin).
-
-Format: Conditional formatting → Background color → Color scale: red (low) → white (mid) → green (high). Domain: -0.10 to +0.30.
+Single Row 2 line chart with sector legend replaces all three: tells the per-sector margin story interactively via Sector slicer, one visual idiom only.
 
 ### 6.8 Footer
 
@@ -658,57 +657,62 @@ Same caveat strip as §5.7.
 
 ### 7.1 Purpose
 
-Cross-company benchmarking within sectors. Bubble chart encodes 4 dimensions; sector vs S&P 100 benchmarks; top/bottom 10 within sector.
+Cross-company benchmarking — where each company sits within its sector, and how sectors compare to the S&P 100 universe.
 
-### 7.2 Sector picker (top of page)
+**Visual budget: 3 visuals + footer.** Per project standing 4-max constraint.
 
-Single-select slicer on `dim_company[gics_sector]`. Default: highest-revenue sector.
+### 7.2 Slicers (header strip)
 
-### 7.3 Row 1 — Bubble chart (~60% width)
+- Date Range — `dim_as_of_date[as_of_date]` (synced from Page 1).
+- Sector — `dim_company[gics_sector]` (synced from Page 1).
+
+### 7.3 Row 1 — Bubble scatter (full width, ~250-300px tall)
 
 Visual: **Scatter chart**.
 
 Field wells:
-- X-axis: Revenue measure (build a helper that pivots mart_peer_benchmark to wide format, OR use mart_financial_health's already-pivoted revenue column).
-- Y-axis: Net Income measure (same source).
-- Size: Assets measure.
-- Legend: `dim_company[gics_industry_group]` for color.
+- X-axis: revenue (per-company, use `mart_financial_health[revenue]` directly or build a per-company revenue measure).
+- Y-axis: net margin (per-company `mart_financial_health[net_margin]`).
+- Size: `mart_financial_health[assets]`.
+- Legend: `dim_company[gics_sector]` (color by sector).
 - Details: `dim_company[entity_name]`.
 
-Tooltip: custom tooltip page (see §7.7).
+Visual-level filter: latest FY only (pin to `mart_financial_health[fiscal_year]` = Latest Complete FY, OR via a measure that respects the universe-level threshold).
 
-Title: "Peer benchmark: revenue × net income × assets at latest FY".
+Tooltip: default PBI tooltip with entity_name + ticker. Custom tooltip page deferred (complexity vs analyst lift).
 
-### 7.4 Row 1 — Top 10 + Bottom 10 in sector (~20% each, flanking bubble)
+Title: "Companies by revenue and net margin, sized by assets — latest FY".
 
-Two bar charts. Y-axis = ticker. X-axis = revenue. Top N filter applied.
+### 7.4 Row 2 left — Sector benchmark bar (~50% width)
 
-### 7.5 Row 2 — Sector vs S&P 100 benchmark gauges (~50% width)
+Visual: **Clustered bar chart** (horizontal).
 
-Three gauges showing the selected sector's mean vs the S&P 100 mean for revenue, net income, assets. Use the **Gauge visual**.
+Field wells:
+- Y-axis: `dim_company[gics_sector]`.
+- X-axis: `[Sector Net Margin]` (or `[Sector Revenue]` — pick the one that tells the cleaner ranking story).
 
-Field wells per gauge:
-- Value: sector mean (use `peer_mean_value` for the appropriate canonical concept).
-- Max value: S&P 100 mean.
-- Min value: 0.
+Format: Analytics pane → Constant line at S&P 100 universe median value (reference benchmark).
 
-### 7.6 Row 2 — Peer rank distribution histogram (~50% width)
+Sort: descending by measure.
 
-Visual: **Column chart**.
-- X-axis: `mart_peer_benchmark[peer_rank]` (bucketed).
-- Y-axis: count of companies.
-- Filtered to selected sector.
+Title: "Sector benchmarks vs S&P 100 median".
 
-### 7.7 Tooltip page (custom)
+### 7.5 Row 2 right — Within-sector top 5 (~50% width)
 
-Create a hidden report page named "Tooltip — Company snapshot". Size: tooltip (320x240). Disable the page in the page navigation but enable as tooltip on the bubble chart's Format → General → Tooltip.
+Visual: **Clustered bar chart** (horizontal).
 
-Page contents:
-- Company name (text box bound to `dim_company[entity_name]`).
-- 5-year mini revenue trend.
-- Latest FY net margin, ROA, debt/equity.
+Field wells:
+- Y-axis: `dim_company[ticker]`.
+- X-axis: `mart_financial_health[net_margin]` or `mart_financial_health[revenue]`.
+- Visual filter: Top N on ticker by the chosen measure, value = 5.
 
-### 7.8 Footer
+Filtered to selected sector via page-level Sector slicer. When sector = All, shows top 5 across the universe.
+
+Sort: descending.
+
+Title: "Top 5 in selected sector".
+
+### 7.6 Footer
 
 Same caveat strip.
 
@@ -718,60 +722,19 @@ Same caveat strip.
 
 ### 8.1 Purpose
 
-Per-company financial health deep-dive. Decomposition tree drills from revenue → sector → company. 8-ratio gauge grid with traffic-light comparison. 10-year ratio trajectory. Health heatmap.
+Per-company financial health: decomposition view → 8-ratio comparison → selected-ratio trajectory → sector ranking on key ratios.
 
-### 8.2 Company picker
+**Visual budget: 4 visuals + footer** (page is the deepest analytical view in the report; full 4-visual budget used).
 
-Slicer on `dim_company[entity_name]`. Style: search-as-you-type (Slicer Format → Search → On). Single-select. Default: blank (page falls back to S&P 100 aggregate when nothing selected).
+### 8.2 Slicers (header strip)
 
-### 8.3 Row 1 — Decomposition tree (~50% width)
+- Sector — `dim_company[gics_sector]` (synced from Page 1).
+- Entity — `dim_company[entity_name]` search-as-you-type single-select (Page 4 local).
+- Ratio — disconnected `Ratio Selector` helper table (Page 4 local, single-select). Default: Net margin.
 
-Visual: **Decomposition tree** (PBI built-in AI visual).
+### 8.3 Ratio Selector helper table (Page 4)
 
-Field wells:
-- Analyze: `[Total Revenue (Latest FY)]`.
-- Explain by: `dim_company[gics_sector]`, `dim_company[gics_industry_group]`, `dim_company[entity_name]` (in that order).
-
-Title: "Revenue decomposition: sector → industry group → company".
-
-### 8.4 Row 1 — 8-ratio gauge grid (~50% width)
-
-4×2 grid of small gauges. Each gauge shows the selected company's ratio vs sector mean vs S&P 100 mean. Traffic-light color (green/amber/red based on quartile).
-
-Ratios (from mart_financial_health):
-1. gross_margin
-2. net_margin
-3. current_ratio
-4. debt_to_equity
-5. return_on_assets
-6. return_on_equity
-7. asset_turnover
-8. cash_to_assets
-
-Each gauge needs a sector-mean and S&P 100-mean comparison measure. Pattern (for gross_margin):
-
-```dax
-Gross Margin Selected = 
-CALCULATE(AVERAGE(mart_financial_health[gross_margin]),
-          mart_financial_health[as_of_date] = MAX(mart_financial_health[as_of_date]))
-
-Gross Margin Sector Mean = 
-CALCULATE(AVERAGE(mart_financial_health[gross_margin]),
-          mart_financial_health[as_of_date] = MAX(mart_financial_health[as_of_date]),
-          ALL(dim_company[entity_name]))
-```
-
-(Replicate for the other 7 ratios.)
-
-### 8.5 Row 2 — 10-year ratio trajectory (full width)
-
-Visual: **Line chart** with multi-series toggle.
-
-Field wells:
-- X-axis: `mart_financial_health[fiscal_year]`.
-- Y-axis: a switch measure that picks the ratio based on a slicer.
-
-Build a "Ratio Selector" disconnected helper table:
+DAX-defined disconnected helper.
 
 ```dax
 Ratio Selector = 
@@ -789,22 +752,66 @@ DATATABLE("Ratio", STRING, "Sort", INTEGER,
 )
 ```
 
-Plus a switch measure that returns the selected ratio's per-year value.
+A SWITCH measure (Selected Ratio Value) reads `SELECTEDVALUE('Ratio Selector'[Ratio])` and returns the corresponding `mart_financial_health` column.
 
-### 8.6 Row 3 — Health heatmap (full width)
+### 8.4 Row 1 left — Decomposition tree (~50% width)
 
-Visual: **Matrix** with conditional formatting on cells.
+Visual: **Decomposition tree** (PBI native AI visual).
 
 Field wells:
-- Rows: a categorical list of the 8 ratios (build a helper table similar to Ratio Selector).
-- Columns: `mart_financial_health[fiscal_year]`.
-- Values: the ratio value.
+- Analyze: `[Total Revenue (Latest FY)]`.
+- Explain by: `dim_company[gics_sector]`, `dim_company[gics_industry_group]`, `dim_company[entity_name]`.
 
-Conditional formatting: traffic-light scale per row (each ratio's domain differs).
+Title: "Revenue decomposition — sector → industry group → company".
 
-### 8.7 Footer
+### 8.5 Row 1 right — 8-ratio comparison Matrix (~50% width)
+
+Replaces the v1 8-gauge grid (8 gauges = 8 sub-visuals; over the visual budget). Single Matrix shows all 8 ratios + 3 comparison columns in one container.
+
+Visual: **Matrix**.
+
+Field wells:
+- Rows: 8 ratio names (use the `Ratio Selector` helper or a static text list).
+- Values (3 measures, side by side):
+  - Selected Company — value of the ratio for the entity selected in the Entity slicer.
+  - Sector Mean — value of the ratio averaged across the selected sector (REMOVEFILTERS(dim_company[entity_name]) pattern).
+  - S&P 100 Mean — value of the ratio averaged across the universe (REMOVEFILTERS(dim_company) pattern).
+
+Format: traffic-light conditional formatting per row (each ratio has its own healthy/unhealthy domain — set per-row via DAX rules in the conditional formatting dialog).
+
+Title: "Selected company vs sector vs S&P 100 — 8 financial health ratios".
+
+### 8.6 Row 2 — Selected ratio trajectory (full width)
+
+Visual: **Line chart**.
+
+Field wells:
+- X-axis: `mart_financial_health[fiscal_year]`.
+- Y-axis: a SWITCH measure that returns the selected ratio's per-year value.
+- Legend: a small Series helper ("Selected Company" / "Sector Mean") — overlay two lines for context.
+
+Title: "[Selected ratio] trajectory — company vs sector mean".
+
+### 8.7 Row 3 — Sector ratio ranking (full width)
+
+Visual: **Clustered bar chart** (horizontal).
+
+Field wells:
+- Y-axis: `dim_company[gics_sector]`.
+- X-axis: SWITCH measure returning sector-mean value of the selected ratio.
+
+Sort: descending.
+
+Title: "Sector ranking — [selected ratio]".
+
+### 8.8 Footer
 
 Same caveat strip.
+
+### 8.9 What was dropped from v1
+
+- **8-gauge grid (4×2)** dropped — 8 sub-visuals exceeds the 4-max budget and is also fiddly to size in Desktop. Replaced with the single 8-ratio Matrix.
+- **Health heatmap (Row 3 v1)** dropped — redundant with the Matrix, and 8×10 cells with per-row conditional formatting is fragile in PBI Desktop. The Matrix carries the ratio comparison story; the line chart carries the trajectory story.
 
 ---
 
@@ -812,14 +819,16 @@ Same caveat strip.
 
 ### 9.1 Purpose
 
-Historical + forecast revenue trajectories with 95% confidence intervals. Per-sector forecast small multiples. Top forecasted growth ranking. Model metadata transparency.
+Historical + 3-year forecast revenue trajectory with 95% CI band. Headline forecast KPIs + top forecasted growth ranking.
 
-### 9.2 Slicers
+**Visual budget: 3 visuals + footer + 2 risk caveat boxes** (caveats are text strips, not visual containers).
 
-- `dim_company[gics_sector]` — multi-select.
-- `dim_company[entity_name]` — single-select dropdown.
+### 9.2 Slicers (header strip)
 
-### 9.3 Row 1 — Historical + forecast trajectory with CI band (~2/3 width)
+- Sector — `dim_company[gics_sector]` (synced from Page 1 — note Page 5 forecasts are not snapshot-versioned, but Sector still cross-filters meaningfully).
+- Entity — `dim_company[entity_name]` single-select (Page 5 local).
+
+### 9.3 Row 1 left — Historical + forecast trajectory with CI band (~2/3 width)
 
 Visual: **Line chart** layered with **Area chart** (Area underneath, Line on top).
 
@@ -832,48 +841,57 @@ Format the line:
 - `historical` segment: solid blue, 2px stroke.
 - `forecast` segment: dashed blue, 2px stroke.
 
-Layer underneath: Area chart with `lower_ci_95` and `upper_ci_95` from mart_growth_forecast, light translucent fill behind the forecast portion only.
+Layer underneath: Area chart with `mart_growth_forecast[lower_ci_95]` and `mart_growth_forecast[upper_ci_95]`, light translucent fill behind the forecast portion only.
 
-### 9.4 Row 1 — KPI callouts (~1/3 width)
+Title: "Revenue trajectory — historical + 3-year forecast with 95% CI".
 
-Three text boxes:
-- 3-year forecasted CAGR.
-- Forecast vs historical YoY %.
-- Average model_aic across the selected universe (model fit quality indicator).
+### 9.4 Row 1 right — KPI callouts (~1/3 width)
 
-### 9.5 Row 2 — Per-sector forecast small multiples (full width)
+Three stacked text boxes (no Card visuals — project lock). Same dynamic-value pattern as Page 2 §6.5 (each box uses + Value, "Name your value" populated to enable Save).
 
-Same pattern as Page 2 small multiples — line chart with sector as small-multiples dimension.
+| Label | Measure |
+|---|---|
+| 3-year forecast CAGR | CAGR of forecast revenue from latest historical year to +3 forecast year. |
+| Forecast vs historical YoY | first-year forecast YoY % vs the last historical YoY %. |
+| Average model AIC | `AVERAGE(mart_growth_forecast[model_aic])` — model fit quality indicator. |
 
-### 9.6 Row 3 — Top forecasted growth ranking (~50% width)
+### 9.5 Row 2 — Top 10 forecasted growth (full width)
 
-Visual: **Bar chart**. Top N companies by 3-year forecasted revenue CAGR.
+Visual: **Clustered bar chart** (horizontal).
 
-### 9.7 Row 3 — Model metadata panel (~50% width)
+Field wells:
+- Y-axis: `dim_company[ticker]`.
+- X-axis: per-company 3-year forecast CAGR measure.
+- Visual filter: Top N on ticker by CAGR, value = 10.
 
-Visual: **Table**.
-- Columns: entity_name, ticker, model_name (Holt-Winters / ARIMA), model_aic, historical_obs_count.
-- Sort: by model_aic ascending (best-fit first).
+Sort: descending.
 
-### 9.8 Risk 56 forecast horizon note
+Title: "Top 10 forecasted revenue CAGR (3-year)".
 
-Insert a text box near Row 1 reading:
+### 9.6 Risk 56 forecast horizon caveat
+
+Small text box near Row 1:
 
 ```
 Forecasts extend 3 years from each company's latest historical observation. Companies with FY2024 latest forecast FY2025-2027; companies with FY2025 latest forecast FY2026-2028.
 ```
 
-### 9.9 Risk 60 structural shocks caveat
+### 9.7 Risk 60 structural shocks caveat
 
-Insert a small text box (lower-left) reading:
+Small text box (lower-left of Row 2):
 
 ```
-Forecasts are 3-year Holt-Winters / ARIMA projections; structural events such as spinoffs, divestitures, and M&A are not modeled. Forecasts for post-divestiture filers like GE (2024 GE Vernova + GE HealthCare separations) and 3M (2024 fiber optics + food safety divestitures) should be interpreted accordingly.
+Forecasts are 3-year Holt-Winters / ARIMA projections; structural events such as spinoffs, divestitures, and M&A are not modeled. Post-divestiture filers like GE (2024 GE Vernova + GE HealthCare separations) and 3M (2024 fiber optics + food safety divestitures) should be interpreted accordingly.
 ```
 
-### 9.10 Footer
+### 9.8 Footer
 
 Same caveat strip.
+
+### 9.9 What was dropped from v1
+
+- **Per-sector forecast small multiples** (v1 Row 2) dropped — 11 mini panels has the same crowding issue Page 2 hit. Sector cross-cut available via the Sector slicer + Row 1 chart.
+- **Model metadata panel** (v1 Row 3 right) dropped — analyst-facing page over-budget; model fit quality summarized via the Average model AIC KPI callout in Row 1 right.
 
 ---
 
