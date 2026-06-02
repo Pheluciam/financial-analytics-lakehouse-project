@@ -168,6 +168,36 @@ models:
         tests:
           - not_null
 
+      - name: yoy_pct
+        description: |
+          Year-over-year percentage change in value_numeric, computed
+          as (value − prior_value) / |prior_value| via LAG OVER
+          (PARTITION BY cik, canonical_concept, as_of_date ORDER BY
+          fiscal_year). Absolute-value denominator preserves numerator
+          sign for negative-prior-year cases (loss → smaller loss is
+          a positive YoY, analyst convention). NULL on the first
+          observed fiscal_year per (cik, canonical, as_of_date)
+          partition — no prior year to compare against. Risk 69
+          (Phase 5 session 5, 2026-06-02). Consumed by Power BI Page 1
+          Top 5 gainers / decliners visual + Revenue YoY % measure
+          rebuild. No range test — extreme legitimate values (loss-to-
+          profit swings, micro-base years) make a tight bound a false
+          positive generator; visual layer truncates the display range.
+
+      - name: yoy_rank
+        description: |
+          DENSE_RANK over yoy_pct DESC NULLS LAST per (as_of_date,
+          fiscal_year, canonical_concept) partition — rank 1 = biggest
+          gainer in the canonical's universe at the snapshot.
+          DENSE_RANK (not RANK) preserves contiguous rank values under
+          ties. NULL-pct rows sort last so they receive the highest
+          rank in their partition. Risk 69 (Phase 5 session 5,
+          2026-06-02). Consumed by Power BI Page 1 Top 5 gainers visual
+          (WHERE yoy_rank ≤ 5); decliners visual uses TOPN on yoy_pct
+          ASC directly.
+        tests:
+          - not_null
+
       - name: load_datetime
         description: |
           UTC timestamp(6) recording when this mart row was materialized

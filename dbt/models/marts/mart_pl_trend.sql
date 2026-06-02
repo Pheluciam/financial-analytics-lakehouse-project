@@ -269,6 +269,63 @@ deduped AS (
     WHERE rn = 1
 ),
 
+yoy AS (
+    -- Risk 69 (Phase 5 session 5, 2026-06-02) — pre-compute YoY % at the
+    -- warehouse layer matching mart_peer_benchmark's peer_rank discipline.
+    -- PBI Page 1 Top 5 gainers / decliners visual + Revenue YoY Rank
+    -- measure consume a stable contract column instead of recomputing
+    -- in DAX. yoy_pct = (value − prior_value) / |prior_value| via LAG
+    -- over (cik, canonical_concept, as_of_date) ordered by fiscal_year.
+    -- |prior_value| denominator preserves sign of the numerator under
+    -- negative-prior-year cases (loss-making → less-loss-making is a
+    -- positive YoY, conventional analyst interpretation). NULLIF guards
+    -- divide-by-zero. LAG returns NULL on the first observed fiscal_year
+    -- per (cik, canonical, as_of_date) partition, so yoy_pct is NULL
+    -- there — correct semantics, no prior year to compare against.
+    SELECT
+        as_of_date,
+        fiscal_year,
+        period_end_date,
+        canonical_concept,
+        value_numeric,
+        unit,
+        cik,
+        entity_name,
+        CASE
+            WHEN LAG(fiscal_year) OVER (
+                PARTITION BY cik, canonical_concept, as_of_date
+                ORDER BY fiscal_year
+            ) = fiscal_year - 1
+            THEN (value_numeric - LAG(value_numeric) OVER (
+                PARTITION BY cik, canonical_concept, as_of_date
+                ORDER BY fiscal_year
+            )) / NULLIF(ABS(LAG(value_numeric) OVER (
+                PARTITION BY cik, canonical_concept, as_of_date
+                ORDER BY fiscal_year
+            )), 0)
+            ELSE NULL
+        END AS yoy_pct
+    FROM deduped
+),
+
+yoy_ranked AS (
+    -- DENSE_RANK over yoy_pct DESC NULLS LAST per (as_of_date,
+    -- fiscal_year, canonical_concept) partition — rank 1 = biggest
+    -- gainer in the canonical's universe at that snapshot. DENSE_RANK
+    -- (not RANK) so ties don't skip rank values — visual consumer
+    -- never sees a gap between #3 and #5 if two companies tie at #4.
+    -- Decliner Top-N is computed in PBI via TOPN on yoy_pct ASC; no
+    -- separate yoy_rank_asc column needed (avoids column proliferation
+    -- when the same information is one ORDER-BY flip away in DAX).
+    SELECT
+        y.*,
+        DENSE_RANK() OVER (
+            PARTITION BY as_of_date, fiscal_year, canonical_concept
+            ORDER BY yoy_pct DESC NULLS LAST
+        ) AS yoy_rank
+    FROM yoy y
+),
+
 hashed AS (
     -- Compute the mart surrogate PK + project final shape + lineage
     -- columns. SHA-256 chain identical to every other Silver-layer hash
@@ -290,9 +347,11 @@ hashed AS (
         value_numeric,
         unit,
         period_end_date,
+        yoy_pct,
+        yoy_rank,
         CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp(6)) AS load_datetime,
         'mart.mart_pl_trend' AS record_source
-    FROM deduped
+    FROM yoy_ranked
 )
 
 SELECT * FROM hashed
