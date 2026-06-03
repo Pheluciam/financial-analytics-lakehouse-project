@@ -15,10 +15,10 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 5 session 7 CLOSED 2026-06-03 — Page 3 Peer Benchmarking shipped (3 visuals: bubble scatter + sector benchmark bar with S&P 100 median constant line + within-sector top 5 by revenue).** Pre-build _Measures tidy: 2 session-6 scrap measures deleted (Sector Net Income from the abandoned dual-measure clustered bar, Sector Revenue CAGR from the abandoned CAGR bar scrapped over the Materials -100% S&P-100-churn artifact). No new measures built — Visual 2's Sector Net Margin reused; Visuals 1 + 3 driven by raw mart_financial_health columns with hardcoded fiscal_year = 2024 visual-level filters (single-point-of-edit when FY2025 cohort clears the ≥80 CIK threshold in a future snapshot). Mockup-before-build pattern applied mid-session per session-6 lesson — low-fidelity 3-panel layout sketch with peer-benchmarking relevance annotations rendered before the field-well drag pass. Senior-DE picks: [Sector Net Margin] over [Sector Revenue] for Visual 2 (margin signal beats raw size — Tech and Consumer Discretionary always win on revenue regardless of economics); mart_financial_health[revenue] over [net_margin] for Visual 3 (adds scale-leadership story distinct from V2's margin ranking). Sector slicer cross-filter smoke test green across all 3 visuals at session close. Both .pbix files saved at session-7 state per the safety-file checkpoint lock. Prior phase: **Phase 5 session 6 CLOSED 2026-06-02 — Page 2 P&L Trend Deep-Dive shipped (3 visuals).** |
-| Next phase | **Phase 5 session 8 — Page 4 Financial Health build** per POWERBI_COPILOT_SPEC.md §8 / POWERBI_PIPELINE.md §3.4. 4 visuals queued (full visual budget — deepest analytical view in the report): Decomposition tree (PBI native AI visual, [Total Revenue (Latest FY)] analyzed by gics_sector → gics_industry_group → entity_name); 8-ratio comparison Matrix (Rows = 8 ratio names, Values = Selected Company / Sector Mean / S&P 100 Mean side-by-side, traffic-light conditional formatting per row); Selected ratio trajectory line chart (SWITCH measure on Y-axis returning per-year value of the chosen ratio, Selected Company vs Sector Mean overlay); Sector ratio ranking bar (Y = gics_sector, X = sector-mean of selected ratio via SWITCH, descending). Helpers needed at session open: Ratio Selector disconnected helper table (8 rows — Gross margin / Net margin / Current ratio / Debt to equity / ROA / ROE / Asset turnover / Cash to assets); Selected Ratio Value SWITCH measure dispatching SELECTEDVALUE('Ratio Selector'[Ratio]) to the right mart_financial_health column; Sector Mean + S&P 100 Mean comparison measures using REMOVEFILTERS(dim_company) at the appropriate scope. Slicers: Sector synced from Page 1, Entity Page-4-local search-as-you-type single-select on entity_name, Ratio Page-4-local single-select from Ratio Selector. Session-discipline locks carry forward verbatim (1-2 UI steps per chunk, screenshot verification, no Card visuals, 4-visual budget cap, safety-file checkpoint pattern, no inline backticks for non-paste-ables, paste-ables in code blocks always, page-level filter convention, mockup-before-build at sketch fidelity, no path choices). |
-| Last session closed | 2026-06-03 (Phase 5 session 7 CLOSED — Page 3 Peer Benchmarking ships with 3 visuals; pre-build tidy of 2 session-6 scrap measures from _Measures; mockup-before-build sketch applied mid-session; senior-DE picks documented on V2 + V3 X-axis measure selection; sector slicer cross-filter smoke test green; both .pbix files saved at session-7 state. Previous: 2026-06-02 — Phase 5 session 6 CLOSED — Page 2 P&L Trend ships with 3 visuals.) |
-| Last bundled commit | 2026-06-03 — b9a0dd6 — Phase 5 session 7 closeout: Page 3 Peer Benchmarking ship (3 visuals: bubble + sector benchmark bar with constant line + within-sector top 5) + _Measures tidy of session-6 scrap (Sector Net Income + Sector Revenue CAGR deleted) + PROJECT_CONTEXT status refresh + POWERBI_PIPELINE section 1 progress note + README Status line refresh. Predecessor: 9fc12e8 — Phase 5 session 6 closeout (amended). |
+| Active phase | **Phase 5 session 8 CLOSED 2026-06-03 — Page 4 Financial Health shipped (3 visuals: 8-ratio sector-vs-S&P 100 Matrix + Sector net income rank-movement Ribbon chart + Sector health trajectory Line).** Three during-build pivots banked: (1) **dbt mart is canon, not spec aspirational columns** — spec ratio list had current_ratio + asset_turnover which never existed in mart_financial_health.sql; rebuilt Ratio Names with the 8 actual dbt columns (gross_margin / operating_margin / net_margin / operating_cf_margin / ROA / ROE / D/E / cash_to_assets). (2) **V2 swapped from Decomposition tree to Ribbon chart** — decomp tree failed static-presentation (single block landing state for portfolio screenshots) AND measure-context (REMOVEFILTERS in [S&P 100 Net Margin] broke drill scope returning 0.16 everywhere). Ribbon chart is brand-new viz idiom in the report — 11 sectors flowing across 2009-2024 with rank reordering, tells "Tech overtook Financials around 2018" stories visually. (3) **Sector ROE / Sector ROA changed from AVERAGE to DIVIDE/SUM** — AVERAGE pattern blew up at 2014-2015 (−2000% spike) from per-company small-denominator explosions; DIVIDE/SUM at universe-aggregate scope is analyst-correct and stable. (4) **Page-level fiscal_year filter abandoned** — PBI mechanics: visual filters INTERSECT page filters, they don't override (corrected mental model). Visual-level filters per visual instead: V1 FY=2024, V2/V3 between 2009 and 2024. Banked as standing PBI convention §2.7. Smoke test green across IT / Energy / All sector states. Both .pbix files saved at session-8 V1+V2+V3 landed checkpoint per safety-file lock. Prior phase: **Phase 5 session 7 CLOSED 2026-06-03 — Page 3 Peer Benchmarking shipped (3 visuals).** |
+| Next phase | **Phase 5 session 9 — Page 5 Growth/Forecast build.** Open with the decision left loose in session 8: ship v2 candidate (line+CI band + KPI strip + acceleration scatter + forecast waterfall) OR keep current §9 spec (line+CI + KPI strip + Top 10 clustered bar). v2 candidate adds two brand-new viz idioms (acceleration scatter on CAGR×CAGR, forecast bridge waterfall). See POWERBI_COPILOT_SPEC.md §9 preamble + POWERBI_PIPELINE.md §3.5 for the v2 candidate detail. Session-discipline locks carry forward verbatim from sessions 5-8 with three new additions: (i) PBI filter precedence rule (visual intersects page, don't override) per POWERBI_PIPELINE.md §2.7; (ii) verify dbt mart column names before writing measures (canonical source = the .sql file in dbt/models/marts/, not the spec); (iii) DIVIDE/SUM pattern for aggregate financial ratios on trajectory visuals (avoid AVERAGE-pattern denominator explosions). |
+| Last session closed | 2026-06-03 (Phase 5 session 8 CLOSED — Page 4 Financial Health ships with 3 visuals after 4 during-build pivots; dbt-as-canon lesson banked; ribbon-chart swap from decomp tree; DIVIDE/SUM pattern for aggregate ratios; visual-level filter convention replaces page-level for mixed-scope pages; both .pbix files saved. Previous: 2026-06-03 — Phase 5 session 7 CLOSED.) |
+| Last bundled commit | 2026-06-03 — pending — Phase 5 session 8 closeout: Page 4 Financial Health ship (3 visuals: matrix + ribbon + multi-line trajectory) + 4 helper measures built (Sector Ratio Value + S&P 100 Ratio Value + Δ Ratio Value + Δ Direction + Sector ROE + Sector ROA + Sector Net Income) + spec §8 rewrite to as-shipped state + PIPELINE §3.4 matching + §2.7 PBI filter precedence convention + PROJECT_CONTEXT status refresh + README Status refresh. Predecessor: b9a0dd6 — Phase 5 session 7 closeout (amended). |
 | Active blockers | None. Page 1 portfolio-grade complete. Pages 2-5 queued one per session. |
 | Open questions | Phase 6 CI/CD forward-verify still deferred. Risk 55 dbt-side fix (canonical_concept_tag_preference seed expansion + 6-place Jinja concept-list lockstep edits across intermediate + 5 warehouse models + cascade rebuild) deferred to a dedicated Phase 6 mapping-expansion session — 2-4 hour scope, out of Phase 5 cadence; documented in `POWERBI_PIPELINE.md` section 4 + carried on every page footer caveat strip. Risk 56 forecast horizon handling deferred to Phase 5 session 5 (Page 5 Growth/Forecast) where the per-company horizon is made explicit to viewers via a dedicated metadata panel + clip-at-FY2027 option for aggregate trajectory. Per-company tag-preference override at sat_concept_value (Risk 49 targeted fix) → deferred enhancement, narrow benefit. Forecast canonical expansion to net_income / operating_income → future targeted forecast-extension session. 6-place hardcoded Jinja `{% set concepts %}` duplication across intermediate + 5 warehouse models → refactor to seed-driven macro deferred (becomes more attractive once Risk 55 mapping expansion lands and the duplication burden visibly compounds). dbt-core version disparity between requirements.txt (1.10.x) and Glue `--additional-python-modules` pin (1.9.10) noted at session 5 prep — cosmetic, both work; reconcile at Phase 6 polish. Phase 5 session 2 onwards: 5-page redesign per POWERBI_PIPELINE.md section 3, one page per session. |
 
@@ -88,6 +88,72 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-06-03 — Phase 5 session 8 — Page 4 Financial Health ships (3 visuals after 4 during-build pivots)
+
+**Goal.** Build Page 4 Financial Health per POWERBI_COPILOT_SPEC.md §8 v3 spec. 3 visuals planned: 8-ratio Matrix + Net margin decomposition tree + multi-ratio sector trajectory line.
+
+**Shipped.** All 3 visuals landed but with 4 during-build pivots and corresponding spec rewrites. Smoke test green across IT / Energy / All sector states. Both .pbix files saved at V1+V2+V3 landed checkpoint.
+
+**The 4 during-build pivots — banked as transferable lessons:**
+
+1. **dbt mart is canon, not spec aspirational columns.** Spec v3 Ratio Names DATATABLE listed current_ratio + asset_turnover. Neither exists in mart_financial_health.sql (lines 396-403 are the actual 8 ratios). DAX SWITCH measure red-squiggled on commit with "parameter is not the correct type" error. Diagnosed by reading mart_financial_health.sql directly + checking PBI Data pane column list. Rebuilt Ratio Names with the 8 actual dbt columns: gross_margin / operating_margin / net_margin / operating_cf_margin / ROA / ROE / D/E / cash_to_assets. **Lesson:** before writing measures referencing mart columns, verify column names against dbt model source (`.sql` file in `dbt/models/marts/`), NOT the spec.
+
+2. **V2 swapped from Decomposition tree to Ribbon chart mid-build.** Decomp tree v3 spec pick failed both static-presentation (single-block landing state reads as empty in portfolio screenshots) AND measure-context (the spec-prescribed [S&P 100 Net Margin] uses REMOVEFILTERS(dim_company), which broke drill scope — every node returned universe 0.16). Pivoted to ribbon chart on Sector Net Income — brand-new viz idiom in the report, 11 sectors flowing across 2009-2024 with vertical rank reordering. Renders strongly as a static screenshot. **Lesson:** AI visuals like decomposition trees optimize for interactive drill, not static presentation. For portfolio dashboards screenshotted into READMEs, prefer visuals that read data-rich at landing state.
+
+3. **Sector ROE / Sector ROA changed from AVERAGE to DIVIDE/SUM pattern.** Spec said `CALCULATE(AVERAGE(...))` for both. At V3 build, the trajectory showed a -2000% spike around 2014-2015 — individual companies with near-zero stockholders_equity blew up per-company ROE values, and AVERAGE amplified the explosion. Rewrote both as `DIVIDE(SUM(net_income), SUM(denominator))` at universe-aggregate scope. Stable trajectories, analyst-correct. **Lesson:** for aggregate financial ratios on trajectory visuals (multi-year, all-company), DIVIDE/SUM beats AVERAGE — the latter amplifies per-company denominator outliers; the former is what analysts actually report and what doesn't get blown up by tiny denominators. Banked as PIPELINE convention.
+
+4. **Page-level fiscal_year filter abandoned mid-build.** v3 spec prescribed page-level FY=2024 with V3 visual-level override to 2009-2024. At V2 build, ribbon chart stayed pinned at FY=2024 despite the visual-level 2009-2024 filter. Diagnosed: PBI visual-level filters INTERSECT page-level filters, they do NOT override. Microsoft Learn confirms. Refactored: removed page-level filter, applied per-visual filters (V1 FY=2024, V2/V3 between 2009 and 2024). **Lesson:** when visuals on the same page need different fiscal_year scopes, use per-visual filters from the start. Page-level filters only work when all visuals share the same scope. Banked as PIPELINE §2.7 standing convention.
+
+**Helpers built (8 new measures + 1 helper table):**
+
+- `Ratio Names` (DAX DATATABLE, 8 rows of dbt-actual ratios).
+- `Sector Ratio Value` (SWITCH on Ratio Names, AVERAGE pattern at sector scope).
+- `S&P 100 Ratio Value` (CALCULATE([Sector Ratio Value], REMOVEFILTERS(dim_company))).
+- `Δ Ratio Value` (subtraction).
+- `Δ Direction` (inversion helper for D/E traffic-light rule).
+- `Sector ROE` (DIVIDE/SUM on mart_financial_health).
+- `Sector ROA` (DIVIDE/SUM on mart_financial_health).
+- `Sector Net Income` (SUM(mart_financial_health[net_income])).
+- `S&P 100 Net Margin` (built but not used in shipped V2 after ribbon swap — kept for potential future use).
+
+**V1 visual layer detail.**
+- Matrix with Ratio Names rows + 3 Value columns (Sector / S&P 100 / Δ).
+- Traffic-light conditional formatting on Δ via Δ Direction with rules ≥0 green + <0 red.
+- Title with inline D/E inversion explanation so viewers don't misread the colour.
+- Visual-level filter fiscal_year = 2024.
+
+**V2 visual layer detail.**
+- Ribbon chart, X=fiscal_year, Y=Sector Net Income, Legend=gics_sector.
+- Visual-level filter fiscal_year between 2009 and 2024.
+- Trillions display units, bottom legend, ribbons coloured per default categorical.
+
+**V3 visual layer detail.**
+- Line chart with 3 Y-axis measures (Sector Net Margin + Sector ROE + Sector ROA).
+- Visual-level filter fiscal_year between 2009 and 2024.
+- Blue / purple / teal colour assignment.
+
+**Smoke test sample.**
+- Sector = IT: V1 5 green + 1 red ROE + 1 inverted-green D/E + 1 small green; V3 Tech ROE climbs to ~50% by 2021; V2 narrows to IT showing $0.5T → $1.5T net income.
+- Sector = Energy: V1 6 red + inverted-green D/E (low leverage); V3 catches 2015-2016 oil crash + 2020 COVID dip; V2 Energy boom-bust pattern.
+- Sector = All: V1 flat 0% Δ; V3 universe-wide trajectory ROE/Margin/ROA stacked correctly; V2 full 11-sector ribbon.
+
+**Doc changes shipped at session close:**
+- `POWERBI_COPILOT_SPEC.md` §8 — full rewrite to as-shipped state. v2 ribbon swap, Ratio Names dbt-actual list, DIVIDE/SUM measures for V3, visual-level filter strategy, Δ Direction helper, helper measures list refresh.
+- `POWERBI_PIPELINE.md` §3.4 — matching summary rewrite.
+- `POWERBI_PIPELINE.md` §2.7 — new PBI filter precedence standing convention. Old §2.7 (Data lineage caveat) renumbered §2.8.
+- `PROJECT_CONTEXT.md` — current status table refreshed; this session log entry appended.
+- `README.md` Status line — refreshed to Phase 5 session 8 CLOSED + Page 4 shipped state.
+- Auto-memory adds (3 new feedback memories per the 4 lessons above — dbt mart canon, PBI filter precedence, DIVIDE/SUM for aggregate ratios).
+
+**Carry-forwards.**
+- Page 5 session 9 reshape v2 candidate still loose — sketched in session 8, NOT locked. Spec §9 preamble + Pipeline §3.5 carry the candidate note.
+- Date Range slicer (dim_as_of_dates[as_of_date]) noted as adding no visible analytical signal on Page 4. Same likely true on Pages 2-3 since all visuals already use Latest Complete FY pattern. Audit + cleanup pass deferred to a future polish session.
+- V1 at Sector = All shows flat 0% Δ. UX cost accepted at session close; could pre-select a default sector or add a "Select a sector" note as a future polish.
+
+**Next session.** Phase 5 session 9 — Page 5 Growth/Forecast build. Open with the v2 candidate vs current §9 decision per the spec preamble note.
+
+---
 
 ### 2026-06-03 — Phase 5 session 7 — Page 3 Peer Benchmarking ships (3 visuals); _Measures tidy of session-6 scrap
 

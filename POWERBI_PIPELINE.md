@@ -119,7 +119,32 @@ palette. Light background reproduces well in PDFs, GitHub README
 screenshots, LinkedIn posts. Chosen at session 1 close after rejecting
 Default + Accessible variants as too generic.
 
-### 2.7 Data lineage & coverage caveat (Risk 55)
+### 2.7 PBI filter precedence (locked session 8, 2026-06-03)
+
+PBI filter mechanics — visual-level filters INTERSECT page-level
+filters, they do NOT override. Confirmed via Microsoft Learn filter-
+precedence docs after the V2 ribbon chart stayed pinned at FY=2024
+during build despite a 2009-2024 visual-level filter (the page-level
+FY=2024 pin AND-ed with the visual range, intersecting to FY=2024).
+
+**Standing pattern.** When visuals on the same page need different
+fiscal_year scopes (e.g. single-year snapshot vs multi-year
+trajectory), do NOT use a page-level fiscal_year filter. Apply per-
+visual filters instead:
+- Single-year snapshot visuals: visual-level filter `fiscal_year =
+  YYYY`.
+- Multi-year trajectory visuals: visual-level filter `fiscal_year
+  between A and B`.
+
+When all visuals on a page DO need the same fiscal_year scope (Page 2
+case — every visual wants 2009-2024), a page-level range filter is
+fine and saves per-visual repetition.
+
+The override-via-visual pattern that the original Page 4 v3 spec
+prescribed is a documented anti-pattern. Per-visual filters are the
+correct mechanism when ranges differ.
+
+### 2.8 Data lineage & coverage caveat (Risk 55)
 
 Every page carries a footer metadata strip with source + universe +
 coverage + snapshot date:
@@ -284,56 +309,101 @@ peer_median_value, peer_rank within sector).
   carries the company-snapshot story adequately for the portfolio
   audience.
 
-### 3.4 Page 4 — Financial Health
+### 3.4 Page 4 — Financial Health (shipped session 8, 2026-06-03)
 
 **Source mart.** mart_financial_health (~10,600 rows, 9 canonicals
-pivoted + 8 NULLIF-guarded derived ratios — gross_margin, net_margin,
-current_ratio, debt_to_equity, ROA, ROE, asset_turnover, cash_to_assets).
+pivoted + 8 NULLIF-guarded derived ratios — gross_margin,
+operating_margin, net_margin, return_on_assets, return_on_equity,
+debt_to_equity, operating_cf_margin, cash_to_assets). Note: the dbt
+mart's actual 8 ratios are NOT the 8 the original spec assumed (spec
+had aspirational current_ratio + asset_turnover; mart has
+operating_margin + operating_cf_margin in those slots). Always verify
+column names from the dbt model source, not the spec.
 
-**Visual budget: 4 visuals + footer** (deepest analytical view in the
-report, full budget used).
+**Visual budget: 3 visuals + footer** (shipped). Page is sector-level
+financial health; per-company depth = Page 6 drill-through.
 
-**What makes this distinctive:**
+**What makes this distinctive (as shipped):**
 
-- Decomposition tree (PBI native AI visual) — drill Total Revenue →
-  Sector → Industry Group → Company. Auto-picks next dimension.
-- 8-ratio comparison Matrix — Rows = 8 ratios, Values columns =
-  Selected Company / Sector Mean / S&P 100 Mean. Traffic-light
-  conditional formatting per row (each ratio's domain differs).
-  Single container replaces v1's 4×2 gauge grid (which was 8
-  sub-visuals — over budget).
-- Selected ratio trajectory line — chosen ratio (via Ratio slicer)
-  over 10 years for selected company + sector mean overlay.
-- Sector ratio ranking bar — one bar per sector for the selected
-  ratio, sorted desc.
+- 8-ratio sector-vs-S&P 100 Matrix — Rows = 8 ratios, Values columns =
+  Sector Ratio Value / S&P 100 Ratio Value / Δ. Traffic-light
+  conditional formatting driven by Δ Direction helper measure that
+  inverts the sign for D/E row (lower debt = healthier).
+- Sector net income rank movement ribbon chart — brand-new viz idiom
+  across the report. 11 sectors as 11 ribbons flowing across
+  2009-2024, vertically reordered by rank at each year. Tells "Tech
+  overtook Financials around 2018" stories visually. Strong static-
+  screenshot presentation. Swapped in mid-build from spec v3's
+  Decomposition tree (which failed both static-presentation and
+  measure-context tests; see §3.4 dropped items).
+- Sector health trajectory line — 3 ratios (Net margin, ROE, ROA) on
+  shared % axis for selected sector over 2009-2024. DIVIDE/SUM
+  pattern (NOT AVERAGE — the spec's AVERAGE pattern caused a −2000%
+  spike at 2014-2015 from per-company small-denominator explosions).
 
-**Layout (4 visuals + footer):**
+**Layout (as shipped):**
 
-- Header: title + Sector slicer + Entity slicer (search-as-you-type)
-  + Ratio slicer.
-- Row 1: Decomposition tree (~50%) + 8-ratio comparison Matrix (~50%).
-- Row 2: Selected ratio trajectory line chart (full width).
-- Row 3: Sector ratio ranking bar (full width).
+- Header: title + Date Range slicer + Sector slicer (both synced from
+  Page 1).
+- Row 1: 8-ratio Matrix (~50% left) + Sector health trajectory
+  (~50% right).
+- Row 2: Sector net income ribbon chart (full width).
 - Footer: caveat.
 
-**Helpers required:**
+**Filter strategy (corrected during build).** No page-level
+fiscal_year filter. Visual-level filters per visual:
+- V1 Matrix: fiscal_year = 2024.
+- V2 Ribbon: fiscal_year between 2009 and 2024.
+- V3 Trajectory: fiscal_year between 2009 and 2024.
 
-- Ratio Selector — disconnected helper table (8 rows, ratio name + sort)
-  driving the Ratio slicer.
-- Selected Ratio Value — SWITCH measure that returns the
-  selected-ratio column from mart_financial_health based on
-  SELECTEDVALUE('Ratio Selector'[Ratio]).
-- Sector Mean / S&P 100 Mean comparison measures using
-  REMOVEFILTERS(dim_company) at the relevant scope.
+PBI mechanics gotcha: visual filters INTERSECT page filters, they
+don't override. Original v3 plan (page-level FY=2024 with V3 visual-
+level override) was incompatible with V2/V3 needing 2009-2024.
 
-**What was dropped from v1:**
+**Helpers required (as-shipped build order):**
 
-- 8-gauge grid — 8 sub-visuals exceeds budget; collapsed into the
-  single 8-ratio Matrix.
-- Health heatmap — redundant with the Matrix; 8×10 per-row conditional
-  formatting was fragile in PBI Desktop.
+1. Ratio Names — 8-row helper table (dbt-actual ratio names).
+2. Sector Ratio Value — SWITCH on Ratio Names[Ratio], AVERAGE pattern
+   at sector scope.
+3. S&P 100 Ratio Value — `CALCULATE([Sector Ratio Value],
+   REMOVEFILTERS(dim_company))` for universe scope.
+4. Δ Ratio Value — subtraction.
+5. Δ Direction — inverts D/E for traffic-light rules.
+6. Sector ROE + Sector ROA — DIVIDE/SUM on mart_financial_health
+   (NOT AVERAGE).
+7. Sector Net Income — `SUM(mart_financial_health[net_income])` for
+   V2 ribbon Y-axis.
+
+**What was dropped from v1 / v2 / during-build:**
+
+- v1 Decomposition tree on Total Revenue — revenue size/composition,
+  not a health story.
+- v2 Treemap of sector members — Page 1 already ships a Treemap.
+- v3 spec Decomposition tree on Net Margin — swapped to ribbon chart
+  during build. Failed static-presentation (landing state is a single
+  block) and measure-context tests (REMOVEFILTERS in S&P 100 Net
+  Margin broke drill context — every node returned 0.16).
+- v1 8-gauge grid — 8 sub-visuals exceeds budget.
+- v1 Health heatmap — redundant with the Matrix; fragile in PBI
+  Desktop at 8×10 cells.
+- v1 current_ratio + asset_turnover ratios — never existed in dbt
+  mart. Replaced with operating_margin + operating_cf_margin (the
+  actual columns).
+- Page-level fiscal_year filter — PBI mechanics incompatible with
+  per-visual fiscal_year needs. Visual-level filters per visual
+  instead.
 
 ### 3.5 Page 5 — Growth/Forecast
+
+> **Session 9 reshape candidate sketched session 8 (2026-06-03), NOT
+> locked.** v2 direction held loose at Phil's call. Decide at session 9
+> open whether to ship v2 or keep §3.5 below. v2 candidate: keep V1
+> line+CI + KPI strip; drop Top 10 clustered bar (Pages 1/2/3 already
+> bar-heavy); add acceleration scatter (historical CAGR × forecast
+> CAGR, sized by revenue, coloured by sector, y=x reference); add
+> forecast bridge waterfall (FY-latest-historical → FY+3 by sector
+> contribution). Both candidate visuals brand-new idioms in the
+> report. Full v2 detail in spec §9 preamble note.
 
 **Source mart.** mart_growth_forecast (~10,100 rows — historical +
 forecast, 98 companies × 3 forecast years, plus model metadata:

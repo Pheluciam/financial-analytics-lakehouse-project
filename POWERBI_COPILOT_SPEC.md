@@ -470,7 +470,7 @@ S&P 100 financial executive overview at the latest snapshot. Cross-cutting KPI s
 ### 5.2 Page-level slicers (top-right)
 
 - Slicer 1 — `dim_company[gics_sector]`. Style: dropdown. Default: All.
-- Slicer 2 — `dim_as_of_dates[as_of_date]`. Style: dropdown. Default: latest.
+- Slicer 2 — `dim_as_of_dates[as_of_date]`. Style: between slider, titled "Date Range" (matches shipped state — between mode replaced the spec's dropdown during session 5 polish for cleaner range scoping; sync chain shares state with Pages 2/3/4/5).
 
 ### 5.3 Row 1 — KPI matrix table (full width, ~120px tall)
 
@@ -720,102 +720,161 @@ Same caveat strip.
 
 ## 8. Page 4 — Financial Health
 
+> **Spec v3 + during-build pivots — session 8 close** (2026-06-03). Page shipped as **sector-level financial health**. Three visuals: 8-ratio Matrix (V1) + Ribbon chart on Sector Net Income (V2, swapped from Decomposition tree mid-build after dbt mart column-name reality bit) + multi-ratio trajectory Line (V3). Page-level fiscal_year filter pattern was abandoned during build — PBI visual filters INTERSECT page filters rather than override (corrected mental model). Visual-level fiscal_year filters applied per-visual instead.
+
 ### 8.1 Purpose
 
-Per-company financial health: decomposition view → 8-ratio comparison → selected-ratio trajectory → sector ranking on key ratios.
+Sector-level financial health — 8-ratio sector vs S&P 100 comparison + drillable AI breakdown of net margin + multi-ratio sector trajectory over time.
 
-**Visual budget: 4 visuals + footer** (page is the deepest analytical view in the report; full 4-visual budget used).
+**Visual budget: 3 visuals + footer.** (Page 6 drill-through carries the per-company depth.)
 
 ### 8.2 Slicers (header strip)
 
-- Sector — `dim_company[gics_sector]` (synced from Page 1).
-- Entity — `dim_company[entity_name]` search-as-you-type single-select (Page 4 local).
-- Ratio — disconnected `Ratio Selector` helper table (Page 4 local, single-select). Default: Net margin.
+- Date Range — `dim_as_of_date[as_of_date]` between slider (synced from Page 1).
+- Sector — `dim_company[gics_sector]` dropdown (synced from Page 1). Default: All.
 
-### 8.3 Ratio Selector helper table (Page 4)
+No Entity slicer (per-company view = Page 6 drill-through). No Ratio slicer (visuals show fixed ratio panels for tighter page focus).
 
-DAX-defined disconnected helper.
+### 8.3 Ratio Names helper table (Page 4)
+
+Disconnected DAX helper. Drives V1 Matrix rows only — not slicer-bound. **Critical reality check during build:** spec v3's original ratio list included `current_ratio` and `asset_turnover` — neither exists in the dbt mart. The mart ships 8 ratios but not those 2 (mart_financial_health.sql lines 396-403 are the canon). Rebuilt with the 8 actual ratios:
 
 ```dax
-Ratio Selector = 
+Ratio Names = 
 DATATABLE("Ratio", STRING, "Sort", INTEGER,
     {
         {"Gross margin", 1},
-        {"Net margin", 2},
-        {"Current ratio", 3},
-        {"Debt to equity", 4},
+        {"Operating margin", 2},
+        {"Net margin", 3},
+        {"Operating CF margin", 4},
         {"Return on assets", 5},
         {"Return on equity", 6},
-        {"Asset turnover", 7},
+        {"Debt to equity", 7},
         {"Cash to assets", 8}
     }
 )
 ```
 
-A SWITCH measure (Selected Ratio Value) reads `SELECTEDVALUE('Ratio Selector'[Ratio])` and returns the corresponding `mart_financial_health` column.
+After creating: select Ratio Names → Ratio column → Column tools → Sort by column → Sort.
 
-### 8.4 Row 1 left — Decomposition tree (~50% width)
+### 8.4 Filter strategy (corrected)
 
-Visual: **Decomposition tree** (PBI native AI visual).
+**Original v3 plan: page-level fiscal_year = 2024 with V3 visual-level override.** This was wrong on PBI mechanics — visual-level filters INTERSECT page-level filters, they do NOT override. Discovered during V2 build when ribbon chart stayed pinned at one year despite the 2009-2024 visual-level filter.
 
-Field wells:
-- Analyze: `[Total Revenue (Latest FY)]`.
-- Explain by: `dim_company[gics_sector]`, `dim_company[gics_industry_group]`, `dim_company[entity_name]`.
+**Shipped pattern:** no page-level fiscal_year filter. Each visual carries its own visual-level filter:
+- V1 Matrix — visual-level filter `mart_financial_health[fiscal_year] = 2024` (single-year health snapshot).
+- V2 Ribbon — visual-level filter `dim_fiscal_year[fiscal_year]` between 2009 and 2024 (full trajectory).
+- V3 Trajectory — visual-level filter `dim_fiscal_year[fiscal_year]` between 2009 and 2024 (full trajectory).
 
-Title: "Revenue decomposition — sector → industry group → company".
-
-### 8.5 Row 1 right — 8-ratio comparison Matrix (~50% width)
-
-Replaces the v1 8-gauge grid (8 gauges = 8 sub-visuals; over the visual budget). Single Matrix shows all 8 ratios + 3 comparison columns in one container.
+### 8.5 V1 — Sector vs S&P 100 — 8 health ratios (Matrix, Row 1 left)
 
 Visual: **Matrix**.
 
 Field wells:
-- Rows: 8 ratio names (use the `Ratio Selector` helper or a static text list).
+- Rows: `Ratio Names[Ratio]`.
 - Values (3 measures, side by side):
-  - Selected Company — value of the ratio for the entity selected in the Entity slicer.
-  - Sector Mean — value of the ratio averaged across the selected sector (REMOVEFILTERS(dim_company[entity_name]) pattern).
-  - S&P 100 Mean — value of the ratio averaged across the universe (REMOVEFILTERS(dim_company) pattern).
+  - Sector Ratio Value — SWITCH on Ratio Names[Ratio], dispatching to AVERAGE of the corresponding mart column at sector scope (current Sector slicer filter).
+  - S&P 100 Ratio Value — SWITCH on Ratio Names[Ratio], dispatching to AVERAGE of the corresponding mart column at universe scope (`REMOVEFILTERS(dim_company)` pattern).
+  - Δ (Sector − S&P 100) — `[Sector Ratio Value] - [S&P 100 Ratio Value]`.
 
-Format: traffic-light conditional formatting per row (each ratio has its own healthy/unhealthy domain — set per-row via DAX rules in the conditional formatting dialog).
+Visual-level filter: `mart_financial_health[fiscal_year] = 2024`.
 
-Title: "Selected company vs sector vs S&P 100 — 8 financial health ratios".
+Format: traffic-light conditional formatting on the Δ column. Driven by `Δ Direction` helper measure that inverts the sign for Debt to equity (lower D/E = healthier — so positive Δ means more leverage = unhealthier = red). Rules:
+- Δ Direction ≥ 0 AND ≤ 100 → green hex `C0DD97`.
+- Δ Direction ≥ −100 AND < 0 → red hex `F7C1C1`.
 
-### 8.6 Row 2 — Selected ratio trajectory (full width)
+Title: `Sector vs S&P 100 — 8 health ratios (D/E inverted — lower debt = healthier)`. The title preserves the inversion explanation inline so viewers don't see "+92.4% red" and assume a bug.
+
+### 8.6 V2 — Sector net income rank movement (Ribbon chart, Row 2 full width)
+
+> **During-build swap from Decomposition tree to Ribbon chart** (session 8). Decomposition tree was the v3 spec pick for AI-visual variety, but two issues surfaced at build:
+> 1. Static-screenshot presentation weak — landing state is a single block with a "+"; portfolio README screenshots don't read as data-rich.
+> 2. Measure-context mismatch — `[S&P 100 Net Margin]` uses `REMOVEFILTERS(dim_company)` which broke drill context (every node returned universe net margin 0.16).
+>
+> Pivoted to ribbon chart for stronger static presentation + brand-new viz idiom + sector rank-movement story.
+
+Visual: **Ribbon chart**.
+
+Field wells:
+- X-axis: `dim_fiscal_year[fiscal_year]`.
+- Y-axis: `[Sector Net Income]` (new — `SUM(mart_financial_health[net_income])`).
+- Legend: `dim_company[gics_sector]` (11 ribbons).
+
+Visual-level filter: `dim_fiscal_year[fiscal_year]` between 2009 and 2024.
+
+Format:
+- Y-axis: Display units = Trillions, decimal places = 1.
+- Data labels: Off (ribbons get cluttered).
+- Legend: On, position bottom.
+- Bar inner padding: ~15-20% for chunkier columns.
+
+Title: `Sector net income — rank movement, 2009-2024`.
+
+Variety rationale: ribbon chart is brand-new across the report (Pages 1/2/3/5 use none). Ribbons reorder vertically by rank at each year — tells "Tech overtook Financials around 2018" narratives visually. Renders strongly as a static screenshot.
+
+### 8.7 V3 — Sector health trajectory (Line chart, Row 1 right)
 
 Visual: **Line chart**.
 
 Field wells:
-- X-axis: `mart_financial_health[fiscal_year]`.
-- Y-axis: a SWITCH measure that returns the selected ratio's per-year value.
-- Legend: a small Series helper ("Selected Company" / "Sector Mean") — overlay two lines for context.
+- X-axis: `dim_fiscal_year[fiscal_year]` (conformed dim).
+- Y-axis: 3 measures plotted as 3 series:
+  - `[Sector Net Margin]` (existing, DIVIDE/SUM pattern from session 6).
+  - `[Sector ROE]` (new — `DIVIDE(SUM(mart_financial_health[net_income]), SUM(mart_financial_health[stockholders_equity]))`).
+  - `[Sector ROA]` (new — `DIVIDE(SUM(mart_financial_health[net_income]), SUM(mart_financial_health[assets]))`).
 
-Title: "[Selected ratio] trajectory — company vs sector mean".
+**Why DIVIDE/SUM not AVERAGE.** The original spec used `CALCULATE(AVERAGE(...))` for both ROE and ROA. At build, V3 trajectory showed a −2000% spike around 2014-2015 — individual companies with tiny or near-zero stockholders_equity blew up per-company ROE values, and the AVERAGE amplified the explosion. DIVIDE/SUM at universe-aggregate scope is the analyst-correct pattern and yields stable trajectories.
 
-### 8.7 Row 3 — Sector ratio ranking (full width)
+Visual-level filter: `dim_fiscal_year[fiscal_year]` between 2009 and 2024.
 
-Visual: **Clustered bar chart** (horizontal).
+Format:
+- Y-axis: Display units = None, Decimal places = 1 (% format).
+- Markers On, shape = circle.
+- 3 distinct colors — Net margin blue `185FA5`, ROE purple `534AB7`, ROA teal `1D9E75`.
 
-Field wells:
-- Y-axis: `dim_company[gics_sector]`.
-- X-axis: SWITCH measure returning sector-mean value of the selected ratio.
-
-Sort: descending.
-
-Title: "Sector ranking — [selected ratio]".
+Title: `Sector health trajectory — Net margin, ROE, ROA, 2009-2024`.
 
 ### 8.8 Footer
 
-Same caveat strip.
+Same caveat strip as §5.7.
 
-### 8.9 What was dropped from v1
+### 8.9 Helpers required (as-shipped build order)
 
-- **8-gauge grid (4×2)** dropped — 8 sub-visuals exceeds the 4-max budget and is also fiddly to size in Desktop. Replaced with the single 8-ratio Matrix.
-- **Health heatmap (Row 3 v1)** dropped — redundant with the Matrix, and 8×10 cells with per-row conditional formatting is fragile in PBI Desktop. The Matrix carries the ratio comparison story; the line chart carries the trajectory story.
+1. `Ratio Names` helper table (§8.3 — 8 actual dbt ratios).
+2. `Sector Ratio Value` SWITCH measure on _Measures (AVERAGE pattern at sector scope).
+3. `S&P 100 Ratio Value` measure on _Measures (`CALCULATE([Sector Ratio Value], REMOVEFILTERS(dim_company))`).
+4. `Δ Ratio Value` = `[Sector Ratio Value] - [S&P 100 Ratio Value]`.
+5. `Δ Direction` helper for traffic-light inversion on D/E row: `SWITCH(SELECTEDVALUE('Ratio Names'[Ratio]), "Debt to equity", -[Δ Ratio Value], [Δ Ratio Value])`.
+6. `Sector ROE` and `Sector ROA` measures — DIVIDE/SUM pattern on mart_financial_health (NOT the AVERAGE pattern originally specified; see §8.7 rationale).
+7. `Sector Net Income` measure — `SUM(mart_financial_health[net_income])` for V2 ribbon Y-axis.
+8. `S&P 100 Net Margin` measure (already existed in some installs; built fresh in session 8 — `CALCULATE(AVERAGE(mart_financial_health[net_margin]), REMOVEFILTERS(dim_company))`. Not used in shipped V2 after the ribbon swap but kept for potential future use.)
+
+### 8.10 What was dropped from v1 / v2 / during-build
+
+- **v1 Decomposition tree on Total Revenue** — revenue size/composition story, not a health story.
+- **v2 Treemap of sector members** — visual idiom already used on Page 1; rejected at v2 mockup review for redundancy.
+- **v3 spec Decomposition tree on Net Margin** — swapped to ribbon chart during build (see §8.6 preamble). Failed both static-presentation and measure-context tests.
+- **v1 8-gauge grid (4×2)** — 8 sub-visuals exceeds the 4-max budget.
+- **v1 Health heatmap (Row 3)** — redundant with the Matrix; fragile in PBI Desktop at 8×10 cells.
+- **v1 Selected-ratio trajectory + Sector ratio ranking bar** — both depended on a Ratio slicer that v3 dropped.
+- **v1 Entity slicer + Ratio slicer** — Entity dropped because per-company view = Page 6 drill-through; Ratio dropped because v3 picks fixed ratios for tighter page focus.
+- **v1 current_ratio + asset_turnover** in the Ratio Names list — neither column exists in the dbt mart (mart_financial_health.sql is canon, not the spec). Replaced with the actual dbt columns operating_margin and operating_cf_margin.
+- **Page-level fiscal_year = 2024 filter** — PBI mechanics (visual filters intersect page filters, don't override) made the page-level approach incompatible with V2/V3 needing 2009-2024. Visual-level filters per visual instead.
 
 ---
 
 ## 9. Page 5 — Growth / Forecast
+
+> **Session 9 reshape candidate sketched in session 8 (2026-06-03) — NOT locked.** Held loose at Phil's call; current §9.3-§9.5 stand. v2 candidate direction (revisit at session 9 open):
+>
+> - Keep V1 (historical + forecast line w/ 95% CI band) — directly tells growth/forecast story.
+> - Keep KPI strip (3 dynamic-value text boxes).
+> - Drop **Top 10 forecasted growth clustered bar (current §9.5)** — Pages 1/2/3 already use horizontal bars heavily, and the bar tells a "who" story that's secondary to the "trajectory" story.
+> - Add **acceleration scatter** — historical CAGR (X) vs forecast CAGR (Y), sized by revenue, coloured by sector, with y = x reference diagonal. Above the diagonal = accelerating; below = decelerating. Brand-new viz idiom in the report (Page 3 bubble is revenue × margin; this is CAGR × CAGR).
+> - Add **forecast bridge waterfall** — FY-latest-historical S&P 100 revenue → FY+3 forecast, decomposed by sector contribution. Brand-new viz idiom (waterfall not used on any other page).
+> - Final layout: V1 line+CI (top-left ~2/3) + KPI strip (top-right ~1/3) + V2 acceleration scatter (mid-left ~50%) + V3 forecast waterfall (mid-right ~50%) + 2 risk caveats + footer.
+>
+> Decide at session 9 open whether to ship v2 candidate or keep current §9 layout.
 
 ### 9.1 Purpose
 
