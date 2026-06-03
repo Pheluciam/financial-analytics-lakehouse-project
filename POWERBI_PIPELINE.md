@@ -9,7 +9,7 @@
 
 ---
 
-## 1. Phase 5 session 1 status — v1 SHIPPED, redesign queued; Phase 5 session 4.5 closed three-layer Step M sign-off (2026-06-01) — data trust now at 100% for redesign
+## 1. Phase 5 session 1 status — v1 SHIPPED, redesign queued; Phase 5 session 4.5 closed three-layer Step M sign-off (2026-06-01) — data trust now at 100% for redesign; sessions 5-7 shipped Pages 1-3 of the redesign
 
 Session 1 shipped a working v1 of the executive overview page —
 data model, _Measures discipline, 4 KPI cards, hero trend chart, 2
@@ -30,6 +30,16 @@ SUCCEEDED 15:52). The 2026-06-01 forward as_of_date (Risk 67) gives every
 Page 1-6 mart query the latest annual snapshot including FY2025-10-K
 comparative coverage. Session 5 kickoff prep — what to refresh / delete /
 replace / add / keep on Page 1 — is in section 3.1 below.
+
+**Phase 5 session 7 close update (2026-06-03).** Pages 1, 2, 3 of the
+redesign now shipped on the single `.pbix`. Page 3 Peer Benchmarking
+shipped with 3 visuals + footer per the 4-visual budget cap locked
+session 6: bubble scatter (revenue × net margin × assets × sector); sector
+benchmark bar with the [Net Margin (Latest FY)] universe-median constant
+line crossing the Materials/Communication Services band at ~15%;
+within-sector top 5 horizontal bar by revenue. Sector slicer cross-filter
+verified across all 3 visuals at session close. Pages 4 (Financial Health)
+and 5 (Growth/Forecast) queued one per session per the existing cadence.
 
 ---
 
