@@ -863,94 +863,116 @@ Same caveat strip as §5.7.
 
 ---
 
-## 9. Page 5 — Growth / Forecast
+## 9. Page 5 — Growth / Forecast (shipped session 9, 2026-06-04)
 
-> **Session 9 reshape candidate sketched in session 8 (2026-06-03) — NOT locked.** Held loose at Phil's call; current §9.3-§9.5 stand. v2 candidate direction (revisit at session 9 open):
->
-> - Keep V1 (historical + forecast line w/ 95% CI band) — directly tells growth/forecast story.
-> - Keep KPI strip (3 dynamic-value text boxes).
-> - Drop **Top 10 forecasted growth clustered bar (current §9.5)** — Pages 1/2/3 already use horizontal bars heavily, and the bar tells a "who" story that's secondary to the "trajectory" story.
-> - Add **acceleration scatter** — historical CAGR (X) vs forecast CAGR (Y), sized by revenue, coloured by sector, with y = x reference diagonal. Above the diagonal = accelerating; below = decelerating. Brand-new viz idiom in the report (Page 3 bubble is revenue × margin; this is CAGR × CAGR).
-> - Add **forecast bridge waterfall** — FY-latest-historical S&P 100 revenue → FY+3 forecast, decomposed by sector contribution. Brand-new viz idiom (waterfall not used on any other page).
-> - Final layout: V1 line+CI (top-left ~2/3) + KPI strip (top-right ~1/3) + V2 acceleration scatter (mid-left ~50%) + V3 forecast waterfall (mid-right ~50%) + 2 risk caveats + footer.
->
-> Decide at session 9 open whether to ship v2 candidate or keep current §9 layout.
+> **AS-SHIPPED.** Shipped a modified v2: kept the line+CI hero and the KPI
+> strip, kept the acceleration scatter, **dropped the forecast bridge
+> waterfall at the data-veto** (real sector-contribution data netted
+> negative — universe forecast $10.0T < history $11.0T, IT alone −$656bn,
+> a univariate-model structural-break artifact, not real) and **kept the
+> Top 10 forecast-CAGR bar** in its place (filters to positive growers, so
+> it sidesteps the artifact). Full root-cause inventory in
+> **POWERBI_PAGE5_AUDIT.md**.
 
 ### 9.1 Purpose
 
-Historical + 3-year forecast revenue trajectory with 95% CI band. Headline forecast KPIs + top forecasted growth ranking.
+Historical + 3-year forecast revenue trajectory with a 95% CI fan, for a
+single consistent company cohort. Headline forecast KPIs + per-company
+acceleration + top forecasted growth ranking.
 
-**Visual budget: 3 visuals + footer + 2 risk caveat boxes** (caveats are text strips, not visual containers).
+**4 containers (at budget): V1 trajectory + KPI strip + scatter + bar.**
+Slicers / footer don't count.
 
-### 9.2 Slicers (header strip)
+### 9.2 The cohort lock (the crux of this page)
 
-- Sector — `dim_company[gics_sector]` (synced from Page 1 — note Page 5 forecasts are not snapshot-versioned, but Sector still cross-filters meaningfully).
-- Entity — `dim_company[entity_name]` single-select (Page 5 local).
+`scripts/forecast.py` forecasts **each company's own latest year + 1..+3**,
+so the forecast surface smears across calendar years 2015-2028 (stale
+filers + mixed reporting cohorts). A raw `SUM(forecast_value)` by
+`fiscal_year` is therefore lumpy and double-counts. **Fix: lock every
+forecast measure to the FY2024 cohort** — companies with
+`latest_historical_year = 2024` (most of the index; ~half by revenue, as
+~half the S&P 100 already filed FY2025 and sit in a later cohort). One
+consistent panel → clean line, clean CI fan, KPIs that reconcile
+end-to-end. Disclosed in the title + footer.
 
-### 9.3 Row 1 left — Historical + forecast trajectory with CI band (~2/3 width)
+### 9.3 The DAX rule that cost ~8 build attempts (now a standing lock)
 
-Visual: **Line chart** layered with **Area chart** (Area underneath, Line on top).
+**Never put a filter on the axis column INSIDE `CALCULATE`.** Writing
+`mart_growth_forecast[fiscal_year] <= 2024` inside `CALCULATE` overrides
+the axis/row context — every year then shows the same grand total (the
+$102.8T flat line). Instead: compute the value respecting row context,
+then **gate the display window OUTSIDE `CALCULATE` with
+`IF(SELECTEDVALUE(mart_growth_forecast[fiscal_year]) ...)`**. Pin the
+snapshot with `ALL()`. See POWERBI_PIPELINE.md §2.9.
 
-Field wells (Line):
-- X-axis: `mart_growth_forecast[fiscal_year]`.
-- Y-axis: `mart_growth_forecast[value_numeric]`.
-- Legend: `mart_growth_forecast[series_type]` (historical / forecast).
+### 9.4 Slicers (header strip)
 
-Format the line:
-- `historical` segment: solid blue, 2px stroke.
-- `forecast` segment: dashed blue, 2px stroke.
+- Sector — `dim_company[gics_sector]` (synced from Page 1).
+- Entity — `dim_company[entity_name]`, **Single select OFF** + Show
+  "Select all" ON, so it defaults to All and a user ticks one company to
+  focus (single-select would force exactly one, which is wrong here).
 
-Layer underneath: Area chart with `mart_growth_forecast[lower_ci_95]` and `mart_growth_forecast[upper_ci_95]`, light translucent fill behind the forecast portion only.
+### 9.5 V1 — Revenue trajectory with 95% CI fan (~2/3 width)
 
-Title: "Revenue trajectory — historical + 3-year forecast with 95% CI".
+Visual: **Line chart**, X = `mart_growth_forecast[fiscal_year]` (sorted
+ascending), four measures on Y:
+- `Revenue Historical Line` — solid blue; cohort actuals, gated to
+  `fiscal_year <= 2024`.
+- `Revenue Forecast Line` — dashed green; cohort forecast, anchored at
+  2024 to the actual so the dashed line joins the solid line.
+- `Forecast Lower CI` / `Forecast Upper CI` — light grey dashed; anchored
+  at 2024 (band pinches to the anchor and fans out), from `lower_ci_95` /
+  `upper_ci_95`.
 
-### 9.4 Row 1 right — KPI callouts (~1/3 width)
+Title: "Revenue trajectory — FY2024 cohort, history + 3-year forecast
+(95% CI)".
 
-Three stacked text boxes (no Card visuals — project lock). Same dynamic-value pattern as Page 2 §6.5 (each box uses + Value, "Name your value" populated to enable Save).
+### 9.6 KPI strip — "Forecast Highlights" (~1/3 width)
 
-| Label | Measure |
-|---|---|
-| 3-year forecast CAGR | CAGR of forecast revenue from latest historical year to +3 forecast year. |
-| Forecast vs historical YoY | first-year forecast YoY % vs the last historical YoY %. |
-| Average model AIC | `AVERAGE(mart_growth_forecast[model_aic])` — model fit quality indicator. |
+**Smart-narrative box copied from the P&L page** (NOT 6 separate text
+boxes — too fiddly to align). Smart-narrative constraints learned:
+dynamic values can't be renamed, and there's no Trillions display-unit
+option → the revenue KPI uses a **text measure** returning "$6.6T". Three
+values, teal `#117A65`:
+- 3-yr forecast CAGR → `[Forecast CAGR (cohort)]` (3.5%).
+- Forecast revenue 2027 → `[Forecast Revenue 2027 (display)]` ($6.6T).
+- Forecast ±95% range → `[Forecast Uncertainty 2027 (cohort)]` (25%) —
+  half-width of the 95% band at 2027 ÷ point forecast. (Replaced the
+  spec's "average model AIC", uninterpretable across companies of
+  different scale.)
 
-### 9.5 Row 2 — Top 10 forecasted growth (full width)
+### 9.7 V2 — Acceleration scatter (mid-left ~50%)
 
-Visual: **Clustered bar chart** (horizontal).
+Visual: **Scatter**. X = `[Historical CAGR]`, Y = `[Forecast CAGR]`,
+Details = `dim_company[entity_name]`, Size = `[Latest Historical
+Revenue]`, Legend = `gics_sector`. (No y=x diagonal — Power BI scatter
+supports only horizontal/vertical constant lines natively; a diagonal
+needs a hacky helper series, not worth it.)
 
-Field wells:
-- Y-axis: `dim_company[ticker]`.
-- X-axis: per-company 3-year forecast CAGR measure.
-- Visual filter: Top N on ticker by CAGR, value = 10.
+### 9.8 V3 — Top 10 forecasted growth (mid-right ~50%)
 
-Sort: descending.
+Visual: **Horizontal bar**. Y = `dim_company[ticker]`, X =
+`[Forecast CAGR]`, visual filter Top N = 10 by `[Forecast CAGR]`, sorted
+descending.
 
-Title: "Top 10 forecasted revenue CAGR (3-year)".
+### 9.9 Footer (carries Risk 56 + Risk 60 disclosure)
 
-### 9.6 Risk 56 forecast horizon caveat
-
-Small text box near Row 1:
+No separate caveat boxes (canvas at budget; title carries the cohort + CI
+note). Risks folded into the footer:
 
 ```
-Forecasts extend 3 years from each company's latest historical observation. Companies with FY2024 latest forecast FY2025-2027; companies with FY2025 latest forecast FY2026-2028.
+Source: SEC EDGAR XBRL  |  Universe: S&P 100 (107 companies)  |  FY2024 coverage: 106 of 107  |  Snapshot: 2026-06-01  |  Forecasts exclude spinoffs/divestitures (e.g. GE, 3M)
 ```
 
-### 9.7 Risk 60 structural shocks caveat
+### 9.10 New measures (session 9, on `_Measures`)
 
-Small text box (lower-left of Row 2):
-
-```
-Forecasts are 3-year Holt-Winters / ARIMA projections; structural events such as spinoffs, divestitures, and M&A are not modeled. Post-divestiture filers like GE (2024 GE Vernova + GE HealthCare separations) and 3M (2024 fiber optics + food safety divestitures) should be interpreted accordingly.
-```
-
-### 9.8 Footer
-
-Same caveat strip.
-
-### 9.9 What was dropped from v1
-
-- **Per-sector forecast small multiples** (v1 Row 2) dropped — 11 mini panels has the same crowding issue Page 2 hit. Sector cross-cut available via the Sector slicer + Row 1 chart.
-- **Model metadata panel** (v1 Row 3 right) dropped — analyst-facing page over-budget; model fit quality summarized via the Average model AIC KPI callout in Row 1 right.
+Trajectory: `Revenue Historical Line`, `Revenue Forecast Line`, `Forecast
+Lower CI`, `Forecast Upper CI`. KPIs: `Forecast CAGR (cohort)`, `Forecast
+Revenue 2027 (cohort)`, `Forecast Revenue 2027 (display)` (text),
+`Forecast Uncertainty 2027 (cohort)`. Scatter + bar reuse `Forecast
+CAGR` / `Historical CAGR` / `Latest Historical Revenue` / `Final Forecast
+Revenue`. **Cleanup owed (session 11):** revenue-trajectory measure
+sprawl — see POWERBI_PAGE5_AUDIT.md §4.
 
 ---
 

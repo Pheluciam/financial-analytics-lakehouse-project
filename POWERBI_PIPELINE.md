@@ -166,6 +166,45 @@ RevenuesNetOfInterestExpense rather than Revenues / SalesRevenueNet).
 Documented as a known data quality limitation; dbt-side fix deferred
 to a dedicated mapping-expansion session in Phase 6 stretch.
 
+### 2.9 DAX: never filter the axis column inside CALCULATE (locked session 9, 2026-06-04)
+
+The single most expensive bug of the Page 5 build (~8 failed line-chart
+attempts). A boolean filter on a column INSIDE `CALCULATE` REPLACES that
+column's filter/row context — it does not intersect it. So putting
+`mart_growth_forecast[fiscal_year] <= 2024` inside `CALCULATE` while
+`fiscal_year` is on the visual's axis makes every axis point evaluate to
+the same grand total (the symptom: a flat line at ~$102.8T, every matrix
+row identical).
+
+**Standing pattern for any time-series measure that must blank part of
+its own axis range:**
+- Compute the value with `CALCULATE(SUM(...), <non-axis filters only>)` —
+  pin the snapshot with `ALL(<table>)`, filter on `row_kind` /
+  `as_of_date` etc. (different columns from the axis), never on the axis
+  column.
+- Gate the displayed window OUTSIDE `CALCULATE`:
+  `VAR ThisYear = SELECTEDVALUE(mart_growth_forecast[fiscal_year])` then
+  `RETURN IF(ThisYear <= AnchorYear, Val)` (or `SWITCH(TRUE(), ...)`).
+- `SELECTEDVALUE` READS the row context without overriding it — that's
+  the whole trick.
+
+Pairs with the forecast-cohort lock: per-company forecast horizons
+(`scripts/forecast.py` emits latest_year+1..+3 per company) make a raw
+calendar-year `SUM(forecast_value)` smear/lumpy. Lock forecast measures
+to one cohort (`latest_historical_year = <anchor>`) for a consistent
+panel. Full detail: POWERBI_PAGE5_AUDIT.md + COPILOT_SPEC §9.2-9.3.
+
+### 2.10 Verify PBI/Power-Platform UI against Microsoft Learn before prescribing clicks (re-locked session 9)
+
+Three Page-5 stalls were all fixed by reading current docs, not training:
+(a) smart-narrative text boxes show EITHER text OR a value and cannot
+rename dynamic values (so KPI strips use copied smart-narrative boxes +
+text measures, not 6 hand-aligned boxes); (b) copy/paste a visual needs
+the visual selected (grey header), not in text-edit mode; (c) a slicer
+needs **Single select OFF** to offer an "All + pick one" default. Doc
+pages move (last-updated dates 2025-10 to 2026-01); assert from the live
+Learn page, not memory.
+
 ---
 
 ## 3. Five-page redesign spec
@@ -393,69 +432,61 @@ level override) was incompatible with V2/V3 needing 2009-2024.
   per-visual fiscal_year needs. Visual-level filters per visual
   instead.
 
-### 3.5 Page 5 — Growth/Forecast
+### 3.5 Page 5 — Growth/Forecast (shipped session 9, 2026-06-04)
 
-> **Session 9 reshape candidate sketched session 8 (2026-06-03), NOT
-> locked.** v2 direction held loose at Phil's call. Decide at session 9
-> open whether to ship v2 or keep §3.5 below. v2 candidate: keep V1
-> line+CI + KPI strip; drop Top 10 clustered bar (Pages 1/2/3 already
-> bar-heavy); add acceleration scatter (historical CAGR × forecast
-> CAGR, sized by revenue, coloured by sector, y=x reference); add
-> forecast bridge waterfall (FY-latest-historical → FY+3 by sector
-> contribution). Both candidate visuals brand-new idioms in the
-> report. Full v2 detail in spec §9 preamble note.
+> **AS-SHIPPED.** Modified v2: line+CI hero + KPI strip + acceleration
+> scatter + Top 10 forecast-CAGR bar. The forecast bridge waterfall was
+> dropped at the data-veto (real sector deltas net negative — IT −$656bn
+> is a univariate structural-break artifact, not real). Full as-shipped
+> detail: COPILOT_SPEC §9. Root cause + measure inventory:
+> POWERBI_PAGE5_AUDIT.md.
 
-**Source mart.** mart_growth_forecast (~10,100 rows — historical +
-forecast, 98 companies × 3 forecast years, plus model metadata:
-model_name, model_aic, historical_obs_count).
+**Source mart.** mart_growth_forecast. Discriminator is `row_kind`
+('historical' | 'forecast'). Historical leg carries `value_numeric`;
+forecast leg carries `forecast_value` + `lower_ci_95` / `upper_ci_95` +
+`model_name` / `model_aic` + `latest_historical_year` (forecast rows
+only). `scripts/forecast.py` forecasts each company's latest_year+1..+3,
+so forecast rows span many calendar years across cohorts.
 
-**Visual budget: 3 visuals + footer + 2 risk caveat text boxes**
-(caveats are text strips, not visual containers).
+**Visual budget: 4 containers (V1 trajectory + KPI strip + scatter +
+bar).** Slicers / footer don't count.
 
-**What makes this distinctive:**
+**The two things that made this hard (both now standing locks):**
 
-- Historical + forecast trajectory with 95% CI band — solid historical
-  line transitioning into dashed forecast line, with translucent CI
-  band (lower_ci_95 → upper_ci_95) shaded behind the forecast portion.
-  PBI's area chart layered under a line chart.
-- KPI callouts panel — 3 text boxes (3-year forecast CAGR, forecast
-  vs historical YoY, average model AIC). Same dynamic-value pattern
-  as Page 2 §6.5. Average model AIC absorbs the v1 Model metadata
-  panel's transparency story in one number.
-- Top 10 forecasted growth ranking — horizontal bar chart of top 10
-  companies by projected 3-year revenue CAGR.
+- **Cohort lock.** A raw calendar-year `SUM(forecast_value)` smears
+  across per-company horizons. Lock every forecast measure to
+  `latest_historical_year = 2024` for one consistent panel (~half the
+  index by revenue; ~half the S&P 100 already filed FY2025). Clean line +
+  clean CI fan that reconciles with the KPIs.
+- **No axis-column filter inside CALCULATE** (§2.9). Gate the year window
+  with `IF(SELECTEDVALUE(fiscal_year) ...)` OUTSIDE `CALCULATE`; pin the
+  snapshot with `ALL()`. This was the flat-$102.8T-line bug.
 
-**Risk 56 caveat (text strip near Row 1):** forecast horizons vary
-per company — companies with FY2024 latest forecast FY2025-2027;
-companies with FY2025 latest forecast FY2026-2028.
+**As-shipped visuals:**
 
-**Risk 60 caveat (text strip lower-left of Row 2):** structural events
-(spinoffs, divestitures, M&A) not modeled. Post-divestiture filers
-like GE (2024 separations) and 3M (2024 divestitures) interpret
-accordingly. Audit 9 confirmed 3 outlier forecast rows (GE 2027 0.42x,
-MMM 2026 0.42x, MMM 2027 0.13x). Univariate models can't distinguish
-one-time structural step-downs from continuing trends; explicit
-viewer caveat is the documented mitigation pending intervention
-analysis / structural-break detection in a future enhancement.
+- V1 line chart, X = fiscal_year (ascending), four measures: Revenue
+  Historical Line (solid blue), Revenue Forecast Line (dashed green,
+  anchored at 2024 so it joins), Forecast Lower/Upper CI (light grey
+  dashed, anchored at 2024 → band fans from the anchor).
+- KPI strip "Forecast Highlights" — a smart-narrative box copied from the
+  P&L page (not 6 text boxes). 3-yr forecast CAGR (3.5%), Forecast
+  revenue 2027 ($6.6T via a text measure — smart narrative has no
+  Trillions unit), Forecast ±95% range (25%).
+- V2 acceleration scatter — Historical CAGR × Forecast CAGR, sized by
+  revenue, coloured by sector.
+- V3 Top 10 forecast-CAGR horizontal bar (Top N = 10).
 
-**Layout (3 visuals + footer + 2 caveat boxes):**
+**Risk 56 / Risk 60 disclosure.** Folded into the footer (no separate
+caveat boxes — canvas at budget; the title already states cohort + 95%
+CI). Footer appends: "Forecasts exclude spinoffs/divestitures (e.g. GE,
+3M)". Audit 9's structural-break outliers (GE/3M) are the reason the
+waterfall was vetoed and the reason for this disclosure.
 
-- Header: title + Sector slicer + Entity slicer.
-- Row 1: Historical + forecast trajectory with CI band (~2/3 width)
-  + KPI callouts (~1/3).
-- Row 2: Top 10 forecasted growth bar (full width) + Risk 60 caveat
-  (small text strip overlay).
-- Risk 56 caveat: small text strip below Row 1 title area.
-- Footer: caveat strip.
+**Slicers.** Sector (synced from Page 1) + Entity (`entity_name`, Single
+select OFF + Show "Select all" ON → defaults to All, click one to focus).
 
-**What was dropped from v1:**
-
-- Per-sector forecast small multiples — same 11-panel crowding issue
-  that Page 2 hit. Sector cross-cut now via Sector slicer + Row 1
-  chart.
-- Model metadata panel (per-company model_name + AIC + obs_count
-  table) — analyst-facing page over budget; summarized via Average
-  model AIC KPI callout.
+**Owed (session 11 QA):** retire the revenue-trajectory measure sprawl —
+POWERBI_PAGE5_AUDIT.md §4.
 
 ### 3.6 Page 6 — Company Detail (drill-through page)
 
