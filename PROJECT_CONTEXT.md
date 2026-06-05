@@ -15,10 +15,10 @@
 
 | Field | Value |
 |---|---|
-| Active phase | **Phase 5 session 10 CLOSED 2026-06-04 — Page 6 Company Detail drill-through ships (4 containers).** (1) Headline KPI strip on the **new Card visual** (revenue / net income / net margin / sector peer rank) driven off **mart columns + dim filters, zero aggregation measures** — the Page-1 "Latest FY" measures blanked under a single-company filter (the ≥80-CIK coverage guard never clears for one company), so columns + a fiscal_year/as_of_date pin replaced them. (2) 15-yr P&L line (Revenue/Net Income All Years). (3) 8-ratio matrix Company vs Sector vs S&P 100. (4) **Revenue-vs-sector gauge** (value_numeric needle, peer_median target, peer_max = sector leader). **Drill-through proven end-to-end** from the Growth&Forecast + Peer Benchmark scatters (entity_name) AND Executive Overview top-movers — the bars are keyed on **ticker**, so **ticker was added as a 2nd drill-through field** (Learn: the drill field must MATCH the source visual and be non-aggregated; a tooltip-aggregated field does NOT work). Back button verified (Ctrl+click returns to source). **Forecast trajectory DROPPED from Page 6** — redundant with the P&L line + the forecast/history legs sit on different snapshot dates so raw-column charts can't align them per-company; a proper per-company forecast-measure set is deferred. **New measures:** Company Name, Company Subtitle, Company Ratio Value, **Sector Ratio (peer)** — the sector measure is drill-safe via `VAR s = SELECTEDVALUE(dim_company[gics_sector]) … CALCULATE([Company Ratio Value], ALL(dim_company), dim_company[gics_sector]=s)` so it derives the sector from the drilled company and survives a ticker OR entity_name drill (the earlier REMOVEFILTERS(entity_name,cik)-only version leaked the ticker filter and collapsed Sector→Company). **Cleanup:** deleted Revenue (Company), S&P 100 Net Margin, Revenue Trend/Historical/Forecast (43→38 measures); renamed Revenue YoY Pct→Revenue YoY % (numeric), Revenue YoY %→Revenue YoY % (text), Δ Ratio Value→Ratio Δ (sector v S&P), Δ Direction→Ratio Δ direction. **The no-Card-visuals lock is REVERSED** — Phil prefers the new Card visual + gauge for the detail page. Prior: **Phase 5 session 9 CLOSED 2026-06-04 — Page 5 Growth/Forecast shipped (4 containers: cohort-locked revenue trajectory with 95% CI fan + Forecast Highlights KPI strip + acceleration scatter + Top 10 forecast-CAGR bar).** Pivots banked: (1) **Forecast bridge waterfall dropped at the data-veto** — real sector-contribution data netted negative (universe forecast $10.0T < history $11.0T; IT alone −$656bn, a univariate-model structural-break artifact, not real). Replaced with Top 10 forecast-CAGR bar (filters to positive growers, sidesteps the artifact). (2) **Hero trajectory root-caused after ~8 failed attempts — the killer bug is a `fiscal_year` filter placed INSIDE `CALCULATE` on the same column that's on the axis: it OVERRIDES the axis/row context (every year showed the same $102.8T total).** Fix pattern now locked: gate the display window with `IF(SELECTEDVALUE(...))` OUTSIDE `CALCULATE`; pin the snapshot with `ALL()`; never put a same-column filter for the axis column inside `CALCULATE`. (3) **Forecast horizon is per-company-relative** (`scripts/forecast.py`: latest_year+1..+3), so a calendar-year SUM smears across cohorts. Fix: **cohort-lock to `latest_historical_year = 2024`** for a single consistent panel — clean line + clean CI fan that reconciles end-to-end. The cohort is ~half the index by revenue (~half the S&P 100 already filed FY2025), accepted for a hero visual; disclosed in title + footer. (4) **KPI strip = a smart-narrative box copied from the P&L page** (NOT 6 text boxes — too fiddly to align). Smart narrative limits: can't rename dynamic values, no Trillions display unit → a text measure returns "$6.6T". (5) Entity slicer needs **Single select OFF** for an "All by default, pick one to focus" behaviour (single-select forces exactly one). Full inventory + root cause in **POWERBI_PAGE5_AUDIT.md**. Prior phase: **Phase 5 session 8 CLOSED 2026-06-03 — Page 4 Financial Health (3 visuals).** |
-| Next phase | **Phase 5 session 11 — formatting + QA pass (Power BI close).** Consistent $/%/decimal number formats across every visual; verify all tooltips; clean axis titles + naming conventions; visual-to-visual consistency; smoke-test all 6 pages. Measure cleanup: verify-then-delete **Revenue YoY % (text)** + **Revenue YoY Rank** (check DAX deps first); confirm the 38-measure set is fully in use. Then **Phase 6 — s1:** add an `is_latest_complete_fy` boolean to the dbt marts + rebuild + re-import — retires the ≥80-CIK Latest-FY measure family, makes the FY pin drill-safe + auto-advancing, and would let Page 6 read mart columns directly (+ bring back a clean per-company forecast trajectory). **s2:** Risk 55 revenue tag-mapping seed expansion (+6-place Jinja + cascade rebuild). **s3:** CI/CD forward-verify. Carry-forward locks: dbt-mart-is-canon; verify PBI UI vs Microsoft Learn before prescribing clicks; **drill-through field must MATCH the source visual and be non-aggregated** (ticker added as a 2nd drill field for the ticker-keyed top-movers bars); **sector-comparison measures on a drill page derive the sector via `SELECTEDVALUE(gics_sector)` + `ALL/ALLEXCEPT(dim_company)`** — never rely on a passed gics_sector filter (it isn't carried by every source visual). |
-| Last session closed | 2026-06-04 (Phase 5 session 10 CLOSED — Page 6 Company Detail drill-through, 4 containers (KPI cards / P&L line / ratio matrix / revenue-vs-sector gauge); drill-through proven from Exec Overview via a ticker drill field + the scatters via entity_name; Back button verified; forecast trajectory dropped; 5 measures deleted + 4 renamed (43→38); no-Card-visuals lock reversed. Previous: 2026-06-04 — Phase 5 session 9 CLOSED.) |
-| Last bundled commit | 2026-06-04 — 4159928 — Phase 5 session 10 closeout: Page 6 Company Detail drill-through (4 containers: new-Card KPI strip + P&L line + 8-ratio matrix + revenue-vs-sector gauge) + new measures (Company Name, Company Subtitle, Company Ratio Value, Sector Ratio (peer)) + ticker added as 2nd drill-through field + measure cleanup (deleted Revenue (Company)/S&P 100 Net Margin/Revenue Trend/Historical/Forecast; renamed 4) + PROJECT_CONTEXT closeout. Predecessor: 5d2713c — Phase 5 session 9 closeout (Page 5 Growth/Forecast). |
+| Active phase | **Phase 5 session 11 CLOSED 2026-06-05 — Power BI formatting + QA pass; PHASE 5 (Power BI) COMPLETE.** Full $/%/decimal number-format standard applied to every visual on all 6 pages; axis/legend/tooltip names cleaned (dropped "Sum of", "by fiscal_year", gics_sector→Sector, leaked measure names); all tooltips verified; cross-page consistency aligned; all 6 pages smoke-tested incl. drill-through in/out + Back. **Five substantive bugs caught + fixed during QA:** (1) **Page-3 snapshot-sum** — scatter + Top-5 bar used raw `Sum of revenue/net_margin/assets` columns that summed across the 3 Date-Range snapshots (WMT $1.9T vs real ~$0.65T, MSFT margin 107.9%); fixed with 3 latest-snapshot-pinned per-company measures (Company Revenue/Net Margin/Assets — `MAX(as_of_date)`+latest-FY pin, NO ≥80 guard so they survive per-row). (2) **Page-4 D/E traffic-light** — rules-based cf silently colours off the RAW measure so the inversion never reached the colour (Financials 7.55x>4.20x showed green); doc-verified fix = "Field value" cf driven by a hex measure (`Ratio Δ colour`, inversion inlined). Surfaced only because Financials is the first HIGH-leverage sector tested. (3) **Page-1 KPI "T" artifact** — the `(Latest FY)` family's ≥80-CIK guard blanks under any single-sector filter (~12 CIKs < 80) and `KPI Latest`'s `… & "T"` left a stray "T"; fixed by wrapping all 4 measures in `CALCULATE(<expr>, REMOVEFILTERS(dim_company))` → universe-stable headlines that still honour Date Range. (4) **Page-4 ribbon Y-axis** floated on negative auto-min; pinned Minimum = −$0.3T to show crisis-year losses (Energy 2020 −$247B) without waste. (5) **KPI matrix row order** floated with no fixed sort once values went constant — pinned via Sort axis. **Format technique banked:** this build has NO static "Custom" format option, so scaled $T tooltips (treemap) + D/E "x" (matrices) use a **Dynamic format string** (`"$#,##0,,,,.0""T"""`); dynamic formats render in cards/tooltips/matrices but NOT on a cartesian axis (axis keeps visual Display units; tooltip on axis-bound measures stays precise $). **Measure cleanup:** deleted Ratio Δ direction (orphaned by the colour-measure rewrite) + Revenue YoY Rank (bars use Top/Bottom-N on Revenue YoY % numeric); kept Revenue YoY % (text) (verified — `KPI Latest` references it); added 4. Net 38→40, all in use. Gauge currency via column Currency format. Prior: **Phase 5 session 10 CLOSED 2026-06-04 — Page 6 Company Detail drill-through ships (4 containers).** (1) Headline KPI strip on the **new Card visual** (revenue / net income / net margin / sector peer rank) driven off **mart columns + dim filters, zero aggregation measures** — the Page-1 "Latest FY" measures blanked under a single-company filter (the ≥80-CIK coverage guard never clears for one company), so columns + a fiscal_year/as_of_date pin replaced them. (2) 15-yr P&L line (Revenue/Net Income All Years). (3) 8-ratio matrix Company vs Sector vs S&P 100. (4) **Revenue-vs-sector gauge** (value_numeric needle, peer_median target, peer_max = sector leader). **Drill-through proven end-to-end** from the Growth&Forecast + Peer Benchmark scatters (entity_name) AND Executive Overview top-movers — the bars are keyed on **ticker**, so **ticker was added as a 2nd drill-through field** (Learn: the drill field must MATCH the source visual and be non-aggregated; a tooltip-aggregated field does NOT work). Back button verified (Ctrl+click returns to source). **Forecast trajectory DROPPED from Page 6** — redundant with the P&L line + the forecast/history legs sit on different snapshot dates so raw-column charts can't align them per-company; a proper per-company forecast-measure set is deferred. **New measures:** Company Name, Company Subtitle, Company Ratio Value, **Sector Ratio (peer)** — the sector measure is drill-safe via `VAR s = SELECTEDVALUE(dim_company[gics_sector]) … CALCULATE([Company Ratio Value], ALL(dim_company), dim_company[gics_sector]=s)` so it derives the sector from the drilled company and survives a ticker OR entity_name drill (the earlier REMOVEFILTERS(entity_name,cik)-only version leaked the ticker filter and collapsed Sector→Company). **Cleanup:** deleted Revenue (Company), S&P 100 Net Margin, Revenue Trend/Historical/Forecast (43→38 measures); renamed Revenue YoY Pct→Revenue YoY % (numeric), Revenue YoY %→Revenue YoY % (text), Δ Ratio Value→Ratio Δ (sector v S&P), Δ Direction→Ratio Δ direction. **The no-Card-visuals lock is REVERSED** — Phil prefers the new Card visual + gauge for the detail page. Prior: **Phase 5 session 9 CLOSED 2026-06-04 — Page 5 Growth/Forecast shipped (4 containers: cohort-locked revenue trajectory with 95% CI fan + Forecast Highlights KPI strip + acceleration scatter + Top 10 forecast-CAGR bar).** Pivots banked: (1) **Forecast bridge waterfall dropped at the data-veto** — real sector-contribution data netted negative (universe forecast $10.0T < history $11.0T; IT alone −$656bn, a univariate-model structural-break artifact, not real). Replaced with Top 10 forecast-CAGR bar (filters to positive growers, sidesteps the artifact). (2) **Hero trajectory root-caused after ~8 failed attempts — the killer bug is a `fiscal_year` filter placed INSIDE `CALCULATE` on the same column that's on the axis: it OVERRIDES the axis/row context (every year showed the same $102.8T total).** Fix pattern now locked: gate the display window with `IF(SELECTEDVALUE(...))` OUTSIDE `CALCULATE`; pin the snapshot with `ALL()`; never put a same-column filter for the axis column inside `CALCULATE`. (3) **Forecast horizon is per-company-relative** (`scripts/forecast.py`: latest_year+1..+3), so a calendar-year SUM smears across cohorts. Fix: **cohort-lock to `latest_historical_year = 2024`** for a single consistent panel — clean line + clean CI fan that reconciles end-to-end. The cohort is ~half the index by revenue (~half the S&P 100 already filed FY2025), accepted for a hero visual; disclosed in title + footer. (4) **KPI strip = a smart-narrative box copied from the P&L page** (NOT 6 text boxes — too fiddly to align). Smart narrative limits: can't rename dynamic values, no Trillions display unit → a text measure returns "$6.6T". (5) Entity slicer needs **Single select OFF** for an "All by default, pick one to focus" behaviour (single-select forces exactly one). Full inventory + root cause in **POWERBI_PAGE5_AUDIT.md**. Prior phase: **Phase 5 session 8 CLOSED 2026-06-03 — Page 4 Financial Health (3 visuals).** |
+| Next phase | **Phase 6 — s1:** add an `is_latest_complete_fy` boolean to the dbt marts + rebuild + re-import — retires the ≥80-CIK Latest-FY measure family (incl. the s11 `REMOVEFILTERS(dim_company)` band-aid on the 4 KPI measures), makes the FY pin drill-safe + auto-advancing, and would let Page 6 read mart columns directly (+ bring back a clean per-company forecast trajectory). **s2:** Risk 55 revenue tag-mapping seed expansion (+6-place Jinja + cascade rebuild). **s3:** CI/CD forward-verify. Carry-forward locks: dbt-mart-is-canon; verify PBI UI vs Microsoft Learn before prescribing clicks; **drill-through field must MATCH the source visual and be non-aggregated** (ticker added as a 2nd drill field for the ticker-keyed top-movers bars); **sector-comparison measures on a drill page derive the sector via `SELECTEDVALUE(gics_sector)` + `ALL/ALLEXCEPT(dim_company)`** — never rely on a passed gics_sector filter (it isn't carried by every source visual). |
+| Last session closed | 2026-06-05 (Phase 5 session 11 CLOSED — Power BI formatting + QA pass; PHASE 5 COMPLETE. Number-format standard across all 6 pages; 5 substantive bugs fixed (Page-3 snapshot-sum → 3 pinned per-company measures; Page-4 D/E cf → Field-value colour measure; Page-1 KPI "T" → REMOVEFILTERS wrap on 4 measures; Page-4 ribbon axis floor; KPI sort pin); measure cleanup −2/+4 → 40; all 6 pages incl. drill-through smoke-tested green. Previous: 2026-06-04 — Phase 5 session 10 CLOSED.) |
+| Last bundled commit | 2026-06-05 — Phase 5 session 11 closeout: Power BI formatting + QA pass (number-format standard all 6 pages; 5 bugs fixed; measure cleanup −2/+4 → 40); both .pbix saved; PROJECT_CONTEXT + README + POWERBI_PIPELINE (§2.11–2.15) updated. Predecessor: 4159928 — Phase 5 session 10 closeout: Page 6 Company Detail drill-through (4 containers: new-Card KPI strip + P&L line + 8-ratio matrix + revenue-vs-sector gauge) + new measures (Company Name, Company Subtitle, Company Ratio Value, Sector Ratio (peer)) + ticker added as 2nd drill-through field + measure cleanup (deleted Revenue (Company)/S&P 100 Net Margin/Revenue Trend/Historical/Forecast; renamed 4) + PROJECT_CONTEXT closeout. Predecessor: 5d2713c — Phase 5 session 9 closeout (Page 5 Growth/Forecast). |
 | Active blockers | None. Page 1 portfolio-grade complete. Pages 2-5 queued one per session. |
 | Open questions | Phase 6 CI/CD forward-verify still deferred. Risk 55 dbt-side fix (canonical_concept_tag_preference seed expansion + 6-place Jinja concept-list lockstep edits across intermediate + 5 warehouse models + cascade rebuild) deferred to a dedicated Phase 6 mapping-expansion session — 2-4 hour scope, out of Phase 5 cadence; documented in `POWERBI_PIPELINE.md` section 4 + carried on every page footer caveat strip. Risk 56 forecast horizon handling deferred to Phase 5 session 5 (Page 5 Growth/Forecast) where the per-company horizon is made explicit to viewers via a dedicated metadata panel + clip-at-FY2027 option for aggregate trajectory. Per-company tag-preference override at sat_concept_value (Risk 49 targeted fix) → deferred enhancement, narrow benefit. Forecast canonical expansion to net_income / operating_income → future targeted forecast-extension session. 6-place hardcoded Jinja `{% set concepts %}` duplication across intermediate + 5 warehouse models → refactor to seed-driven macro deferred (becomes more attractive once Risk 55 mapping expansion lands and the duplication burden visibly compounds). dbt-core version disparity between requirements.txt (1.10.x) and Glue `--additional-python-modules` pin (1.9.10) noted at session 5 prep — cosmetic, both work; reconcile at Phase 6 polish. Phase 5 session 2 onwards: 5-page redesign per POWERBI_PIPELINE.md section 3, one page per session. |
 
@@ -88,6 +88,38 @@ Not deferred — actively NOT in scope for Project #3:
 ## Session log
 
 Append a new entry at every session close. Newest at top.
+
+### 2026-06-05 — Phase 5 session 11 — Power BI formatting + QA pass; PHASE 5 (Power BI) COMPLETE
+
+**Goal.** Final Power BI session: consistent $/%/decimal number formats across every visual on all 6 pages; verify every tooltip; clean axis/legend/title naming; cross-page consistency; smoke-test all 6 pages incl. drill-through; measure cleanup; then close Phase 5.
+
+**Number-format standard (locked, dbt-canon verified).** $ → Currency, 1 dp, display units Trillions on universe pages 1–5 / Billions on the single-company Page 6 + the gauge. % → Percentage 1 dp (ratios stored as decimals). debt_to_equity → 2 dp with an "x" suffix (a multiple, not a %). Counts/rank/fiscal_year → whole number, NO thousands separator. Naming: strip "Sum of …", "by fiscal_year", and leaked measure names from axis/legend/tooltip labels; gics_sector→Sector, entity_name→Company, ticker→Ticker.
+
+**Format technique — Dynamic format strings (this build has no static "Custom").** The PBI Desktop build in use exposes no "Custom" entry in either the Measure-tools Format dropdown or the Model-view Properties Format dropdown. To scale a real number to "$1.7T" in a tooltip (treemap Sector Revenue) or render D/E as "4.20x" in a matrix, use a **Dynamic format string**: Measure tools → Format → Dynamic → replace the format expression with a DAX string, e.g. `"$#,##0,,,,.0""T"""` (four commas immediately left of the decimal = ÷10¹²) or `IF(SELECTEDVALUE('Ratio Names'[Ratio])="Debt to equity","0.00""x""","0.0%")`. **Critical limit (doc-verified):** dynamic format strings render in cards, tooltips, and matrices but **NOT on a cartesian axis** — `None` blanks the axis labels, `Trillions` double-stacks to "$0TT". So for axis-bound trajectory measures we keep the measure on plain Currency 0 dp (precise $ in the tooltip) and let the visual's Display units = Trillions format the axis. Sources: Learn desktop-custom-format-strings + desktop-dynamic-format-strings (both updated 2026-02).
+
+**Five substantive bugs caught during QA (not cosmetics):**
+
+1. **Page-3 snapshot-sum.** The Peer-Benchmark scatter (X=revenue, Y=net_margin, size=assets) and the "Top 5 by revenue" bar used raw `Sum of revenue / Sum of net_margin / Sum of assets` columns. With the Date Range spanning 3 as_of_date snapshots, these summed across all three → ~3× inflation (WMT $1.94T vs real ~$0.65T; MSFT net margin 107.9%, assets $1.5T). The "latest FY" title was a lie. **Fix:** 3 new latest-snapshot-pinned per-company measures — Company Revenue / Company Net Margin / Company Assets, each `VAR Snap = MAX(mart_financial_health[as_of_date])`, `VAR FY = CALCULATE(MAX(fiscal_year), as_of_date=Snap)`, `RETURN CALCULATE(SUM(<col>), as_of_date=Snap, fiscal_year=FY)`. No ≥80 guard, so they resolve per-company (one bubble each). Swapped into the scatter + bar. JPM then read $177.5B / 32.9% / $4.0T — all correct. **Lesson:** any implicit `Sum of <column>` on a snapshot-versioned mart with a date-range slicer is a silent multi-snapshot sum; pin to `MAX(as_of_date)` with a measure.
+
+2. **Page-4 D/E traffic-light inversion never reached the colour.** `Ratio Δ direction` correctly returns −Δ for D/E (verified by adding it as a visible column: −3.34 for Financials), and the matrix cf was even based on that field with a `<0 → red` rule — yet Financials' D/E cell stayed green. Confirmed it was colouring off the RAW `Ratio Δ (sector v S&P)` (+3.34). **Root cause:** rules-based conditional formatting on a measure that carries inverted logic is unreliable. **Doc-verified fix:** "Color by field values" — a hex-returning measure `Ratio Δ colour = VAR d = IF(SELECTEDVALUE('Ratio Names'[Ratio])="Debt to equity", -[Ratio Δ (sector v S&P)], [Ratio Δ (sector v S&P)]) RETURN IF(d<0,"#F4B7B7","#A9D08E")`, with cf Format style = **Field value**. D/E now red for high-leverage sectors (Financials), green for low (IT/Energy). **Only surfaced because Financials is the first HIGH-leverage sector smoke-tested** — every prior test (IT, Energy, All) had D/E ≤ benchmark, so the broken case never showed. `Ratio Δ direction` is now orphaned (inlined into the colour measure) and was deleted.
+
+3. **Page-1 KPI "T" artifact under single-sector filter.** Selecting any one sector left the KPI cards reading "T" / blank. The `(Latest FY)` measure family computes `LatestCompleteFY` via a `DISTINCTCOUNT(cik) >= 80` coverage guard with NO `REMOVEFILTERS`; under a ~12-company sector the guard never reaches 80 → `LatestCompleteFY = BLANK` → the SUM blanks → `KPI Latest`'s `FORMAT(...) & "T"` leaves a stray "T". Edit-interactions "None" did NOT fix it (a page/model filter still reached the measure). **Fix:** wrap all four KPI measures — Total Revenue (Latest FY), Total Net Income (Latest FY), Net Margin (Latest FY), Revenue YoY % (text) — in `CALCULATE(<existing VAR…RETURN>, REMOVEFILTERS(dim_company))`. They now hold the full-universe headline ($9.9T / $1.5T / 14.9% / 6.5%) under any sector while still honouring Date Range (as_of_date untouched) and leaving the sector-responsive visuals (Sector Revenue treemap, YoY bars) unchanged. **This is a band-aid; the real fix is the Phase-6 dbt `is_latest_complete_fy` flag** which retires the whole guard family.
+
+4. **Page-4 ribbon Y-axis floated on negative auto-min,** leaving a big empty band under the stack. Auto-min went negative to fit real crisis-year sector losses (deepest dip Energy 2020 = −$247B). Clipping at 0 would hide real data; pinned Minimum = −$0.3T (−300000000000) — tight, nothing clipped.
+
+5. **KPI matrix row order floated** once the 4 KPI values went constant across sectors (no fixed sort key left). Pinned via the matrix "…" → Sort axis → KPI ascending.
+
+**Measure cleanup.** Deleted: **Ratio Δ direction** (orphaned by the colour-measure rewrite; no dependency error on delete) + **Revenue YoY Rank** (verified unused — the Page-1 gainer/decliner bars use a Top/Bottom-5 filter on Revenue YoY % (numeric), not the rank measure). **Kept: Revenue YoY % (text)** — flagged for deletion in the plan but verification of `KPI Latest`'s DAX showed it is referenced (`FORMAT([Revenue YoY % (text)], "0.0%")`), so it stays. **Added (bug fixes):** Company Revenue, Company Net Margin, Company Assets, Ratio Δ colour. Net **38 → 40 measures**, all in use (on a visual or as a measure dependency).
+
+**Cross-page consistency.** Page-6 matrix header aligned to "Sector" (matched Page-4). Fonts (Segoe UI), teal accent #117A65, and the footer caveat strip were already uniform — no churn manufactured. Page-6 gauge: $ added by formatting the 3 source columns (mart_peer_benchmark value_numeric/peer_max/peer_median) as Currency + gauge Display units Billions, 1 dp → "$134.8bn".
+
+**Smoke test — all 6 pages green.** Sector flips react with nothing blank (KPI cards now hold universe); drill-through verified in + out from Page-1 top-mover bars (ticker), Page-3 scatter (entity_name), Page-5 ticker bar; Back button returns each time; slicers reset to Sector=All / full Date Range.
+
+**Standing discipline reinforced.** Every UI fix this session that mattered (Custom-vs-Dynamic format location, the comma-scaling placement, the Field-value cf route, edit-interactions limits) came from a Microsoft Learn doc check, not training — the verify-PBI-UI-vs-docs lock paid off repeatedly.
+
+**Doc changes shipped at session close.** PROJECT_CONTEXT current-status table + this log entry; README Status line refreshed to s11 CLOSED / Phase 5 complete; POWERBI_PIPELINE.md new §2.11–2.15 (number-format standard; dynamic-format-string technique + cartesian-axis caveat; snapshot-sum → pinned per-company measure pattern; Field-value cf for inverted logic; ≥80-guard REMOVEFILTERS band-aid). Auto-memory: banked the dynamic-format-string technique, the rules-vs-field-value cf rule, the snapshot-sum / pinned-measure pattern, and the ≥80-guard REMOVEFILTERS band-aid.
+
+**Next session.** Phase 6 session 1 — add the `is_latest_complete_fy` boolean to the dbt marts, rebuild, re-import; retire the ≥80-CIK Latest-FY measure family (incl. the s11 REMOVEFILTERS band-aid).
 
 ### 2026-06-04 — Phase 5 session 10 — Page 6 Company Detail drill-through ships (4 containers)
 
@@ -2780,147 +2812,4 @@ decisions, lock the stack, author the project-specific docs, structural audit.
 
 - Live SEC EDGAR API sanity check PASSED against Apple Inc (CIK 320193) with
   User-Agent `Phil <pheluciam@outlook.com>`. ~59KB JSON, populated
-  `filings.recent.accessionNumber` array.
-- Three non-blocking items resolved: Databricks trial timing (defer to Bronze
-  landing close); Azure SQL operational layer (locked as fresh, then
-  superseded by AWS pivot); User-Agent format (confirmed).
-- **PIVOT 1: Cloud vendor — Azure → AWS.** Driver: portfolio breadth for
-  Australian DE job market (research showed Australia/Melbourne split closer
-  to 50/50 than feared 90/10 Azure; Phil already has Azure on CV via Project
-  #2). Phil prior AWS familiarity from NEC Australia.
-- **PIVOT 2: Analytical platform — Databricks → AWS-native (S3 + Glue
-  Catalog + Athena + Lake Formation).** Driver: cost-vs-keyword analysis
-  (Databricks has 14-day trial cliff + $3-5/demo; AWS-native is pennies/demo
-  forever; AWS-native S3/Glue/Athena cluster appears in roughly 2.8× more
-  AWS-shop postings than Databricks).
-- **Mini-projects block** earmarked at 5 slots, sequenced simpler →
-  more complex: (1) dbt Cloud + CI/CD, (2) Databricks, (3) Microsoft Fabric
-  end-to-end, (4) Iceberg vs Delta comparison, (5) Streaming (Kinesis + Glue
-  ETL Spark Structured Streaming). 1-2 Tableau + ~3 Power BI BI-split target.
-- **Mini-projects sit BEFORE the 6-8 week training journey** — journey
-  consolidates lessons from 8 codebases (3 main + 5 mini), not 3.
-- **AI-assistance disclosure convention** baked as standing convention
-  across all 8 portfolio repos. Paste-able README template in
-  TEACHING_PREFERENCES.md.
-- **Debugging fluency** locked as the priority emphasis area in the training
-  journey; in-session debug discipline added to TEACHING_PREFERENCES.md;
-  ≥1 debug-pattern question per session locked as a standing quiz category.
-- All 8 Phase 0 decisions locked (see PROJECT_PLAN.md section 4).
-- **PROJECT_PLAN.md authored fresh.**
-- **PROJECT_CONTEXT.md authored fresh** (this file).
-- **LEARNING_ROADMAP.md** updated extensively — full table refreshed, Project
-  #3 stack section rewritten, mini-projects section added, training journey
-  scope expanded, debugging emphasis added, AI-disclosure convention noted,
-  Notes/changes appended.
-- **ENGINEERING_STANDARDS.md** light update — Project #3 context note added
-  at top, date updated.
-- **LEARNINGS.md** carry-forward subsection populated with Project #2 → Project
-  #3 carry-forward principles.
-- Phase 0 structural audit run — no findings.
-
-**Blockers / surprises.** None. Single bash curl was blocked by sandbox
-proxy allowlist for `data.sec.gov` — pivoted to `mcp__workspace__web_fetch`,
-which routed correctly and returned the JSON. Lesson banked: for SEC EDGAR
-API calls from the sandbox during build, route via web_fetch (or via Phil's
-local Python in Phase 1 once the extract script exists).
-
-**Next session.** Phase 1 — Bronze landing layer kickoff. First sub-steps
-expected: (1) AWS account creation + IAM bootstrap + S3 bucket creation;
-(2) GitHub repo creation + first commit (this Phase 0 doc set); (3)
-`scripts/extract_sec_edgar.py` first draft with polite rate limiter +
-single-company smoke test (Apple, CIK 320193) before any 10-company or
-full-100 scale-up.
-
----
-
-## Files in the project (Phase 2 session 4 close inventory — 2026-05-28)
-
-Doc-shaped:
-
-- `README.md` ✓ (stub; polish at Phase 6 — Status line current as of Phase 1 close, will refresh at Phase 2 close)
-- `PROJECT_PLAN.md` ✓
-- `PROJECT_CONTEXT.md` ✓ (this file)
-- `LEARNING_ROADMAP.md` ✓
-- `TEACHING_PREFERENCES.md` ✓ (Phase 2 session 1 — third re-lock on paste-able discipline)
-- `ENGINEERING_STANDARDS.md` ✓
-- `GLOSSARY.md` ✓
-- `LEARNINGS.md` ✓ (25 Project #3 entries — 10 sessions 1-3 + 3 session 4 + 4 Phase 2 session 1 + 2 Phase 2 session 2 + 4 Phase 2 session 3 + 2 Phase 2 session 4 forward-projected risks 4 + 5)
-- `EXTRACT_PIPELINE.md` ✓ (Phase 1 walkthrough — frozen at Phase 1 close)
-- `DBT_PIPELINE.md` ✓ (Phase 2 session 4 — sections 1-7.8 + 8.1-8.7 + 9 + 10 shipped; section 8 expanded from 4-line stub to 7 subsections covering DV2.0 framing, hand-rolled lock, hub_company, hash key, insert-only filter, verification surface, pattern reusability)
-- `GLOSSARY.md` ✓ (Phase 2 session 4 — extended with 7 DV2.0 entries at end of section 2 + 5 acronyms in section 16)
-
-Code-shaped:
-
-- `scripts/smoke_test_aws.py` ✓ (Phase 1 session 2)
-- `scripts/extract_sec_edgar.py` ✓ (Phase 1 sessions 2-4)
-- `scripts/verify_bronze_s3_metadata.py` ✓ (Phase 1 session 4)
-- `sql/ddl/01_create_bronze_tables.sql` ✓ (Phase 1 session 3; Phase 2 session 3 — cik projection switched type=injected → type=enum with 100 CIKs enumerated)
-- `sql/ddl/02_create_bronze_raw_text_table.sql` ✓ (Phase 2 session 2 — second Bronze table, raw-text view over same S3 location; Phase 2 session 3 — cik projection switched to type=enum)
-- `sql/verify/01_phase1_bronze_verification.sql` ✓ (Phase 1 sessions 3-4)
-- `sql/verify/02_phase2_silver_intermediate_verification.sql` ✓ (Phase 2 session 3 — extended from 6 to 11 checks; 11/11 PASS)
-- `sql/verify/03_phase2_warehouse_verification.sql` ✓ (Phase 2 session 4 — 9-check CTE PASS/FAIL structural verify for hub_company; 9/9 PASS)
-- `iam/lakehouse_dbt_runtime_policy.json` ✓ (Phase 2 session 1 — Customer Managed Policy JSON for phil-dbt; Phase 2 sessions 2-3 — coverage validated, no edits needed)
-- `dbt/dbt_project.yml` ✓ (Phase 2 session 1; Phase 2 session 2 — intermediate +materialized: view re-added; Phase 2 session 3 — intermediate flipped to +materialized: table + Iceberg config; seeds: block added with column_types; Phase 2 session 4 — warehouse block added with incremental + merge + iceberg + parquet + on_schema_change=ignore defaults)
-- `dbt/profiles.yml.example` ✓ (Phase 2 session 1 — env_var template, real profiles.yml gitignored)
-- `dbt/packages.yml` ✓ (Phase 2 session 1 — dbt_utils 1.x)
-- `dbt/seeds/canonical_concepts_dictionary.csv` ✓ (Phase 2 session 3 — 8 rows mapping XBRL US-GAAP tag names to project-canonical concepts + business_area)
-- `dbt/seeds/_seeds.yml` ✓ (Phase 2 session 3 — seed column contracts + not_null/unique tests)
-- `dbt/models/staging/_sources.yml` ✓ (Phase 2 session 1; Phase 2 session 2 — second Bronze source declared)
-- `dbt/models/staging/stg_sec_edgar__companyfacts.sql` ✓ (Phase 2 session 1 — typed cover-page staging model, PASSING)
-- `dbt/models/staging/stg_sec_edgar__companyfacts_raw.sql` ✓ (Phase 2 session 2 — raw-text staging model, PASSING)
-- `dbt/models/intermediate/int_sec_edgar__concepts.sql` ✓ (Phase 2 session 2 — first intermediate model; Phase 2 session 3 — expanded to 8 XBRL tags + period_start_date; PASSING as Iceberg table)
-- `dbt/models/intermediate/int_sec_edgar__concepts_canonical.sql` ✓ (Phase 2 session 3 — canonical-concept reconciliation via seed join; PASSING as Iceberg table)
-- `dbt/models/intermediate/_models.yml` ✓ (Phase 2 session 2; Phase 2 session 3 — extended with canonical model contracts)
-- `dbt/models/warehouse/hub_company.sql` ✓ (Phase 2 session 4 — first DV2.0 hub; hand-rolled SHA-256 hash + source-side insert-only filter; PASSING as Iceberg incremental merge table)
-- `dbt/models/warehouse/_models.yml` ✓ (Phase 2 session 4 — hub_company column contracts + 6 schema tests)
-- `dbt/models/marts/.gitkeep` (Phase 2 session 1 — placeholder until Phase 4 first mart model)
-- `.vscode/settings.json` ✓ (Phase 2 session 1 — yaml.schemas override for dbt_project.yml)
-- `.vscode/dbt_project.permissive.schema.json` ✓ (Phase 2 session 1 — empty schema referenced by settings.json)
-- `requirements.txt` ✓ (Phase 1 session 2; Phase 2 session 1 — added dbt-athena-community)
-
-AWS infrastructure (provisioned via Console, not yet captured as IaC):
-
-- IAM user `phil-admin` (Phase 1 session 1 — AdministratorAccess; Phase 1 scripts)
-- IAM user `phil-dbt` (Phase 2 session 1 — Customer Managed Policy lakehouse-dbt-runtime-access; dbt-athena runtime)
-- IAM Customer Managed Policy `lakehouse-dbt-runtime-access` (Phase 2 session 1)
-- IAM role `AWSGlueServiceRole-financial-analytics-lakehouse` (Phase 1 session 3 — Glue + custom S3 read inline)
-- Glue database `financial_analytics_bronze` (Phase 1 session 3)
-- Glue database `financial_analytics_silver` (Phase 2 session 1)
-- Glue Crawler `crawler_bronze_sec_edgar` (Phase 1 session 3 — retained scaffolding)
-- Athena workgroup `wg_financial_analytics` (Phase 1 session 3)
-- Glue Catalog view `financial_analytics_silver.stg_sec_edgar__companyfacts` (Phase 2 session 1 — dbt-managed)
-- Glue Catalog table `financial_analytics_bronze.sec_edgar_companyfacts_raw` (Phase 2 session 2 — second raw-text Bronze table over same S3 location; manual DDL)
-- Glue Catalog view `financial_analytics_silver.stg_sec_edgar__companyfacts_raw` (Phase 2 session 2 — dbt-managed)
-- Glue Catalog view `financial_analytics_silver.int_sec_edgar__concepts` (Phase 2 session 2 — dbt-managed; first intermediate model)
-- Glue Catalog table `financial_analytics_silver.hub_company` (Phase 2 session 4 — dbt-managed Iceberg incremental merge; first DV2.0 hub)
-
-Repo-config:
-
-- `.env` (gitignored — phil-admin + phil-dbt credential blocks)
-- `.env.example` ✓ (Phase 1 session 1; Phase 2 session 1 — added AWS_DBT_* placeholders)
-- `.gitignore` ✓ (Phase 1 session 1; Phase 2 session 1 — added dbt runtime artifacts + .vscode partial allow)
-- `.venv/` (gitignored, Phase 1 session 2; Phase 2 session 1 — added dbt-athena-community + python-dotenv[cli])
-- `dbt/profiles.yml` (gitignored, Phase 2 session 1 — copy of dbt/profiles.yml.example)
-- `dbt/dbt_packages/`, `dbt/target/`, `dbt/logs/` (gitignored, Phase 2 session 1 — dbt runtime artifacts)
-
----
-
-## Cross-doc reading order at session start
-
-1. **TEACHING_PREFERENCES.md** — how Phil wants to work
-2. **PROJECT_CONTEXT.md** (this file) — where we are right now
-3. **PROJECT_PLAN.md** sections relevant to the active phase — what we're building
-4. **ENGINEERING_STANDARDS.md** if writing code — the audit bar
-5. **LEARNING_ROADMAP.md** sections only if context-shifting (rare mid-project)
-6. **LEARNINGS.md** as needed when a bug class is familiar
-
----
-
-*Last updated: 2026-05-28 (Phase 2 session 4 close — first warehouse-layer
-Data Vault 2.0 hub (hub_company) shipped end-to-end with hand-rolled
-SHA-256 hash + insert-only source-side filter + Iceberg merge incremental;
-6/6 dbt tests + 9/9 SQL structural verify PASS; idempotency proven via
-second-run NO-OP; first ever phase-kickoff forward-verify pass ran +
-banked 2 forward-projected risks BEFORE any code shipped; DBT_PIPELINE
-section 8 + GLOSSARY DV2.0 entries shipped). Append a session-log entry
-at every session close.*
+  `filings.re

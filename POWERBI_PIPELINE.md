@@ -207,6 +207,104 @@ Learn page, not memory.
 
 ---
 
+### 2.11 Number-format standard (locked session 11, 2026-06-05)
+
+Applied to every visual on all 6 pages. Verify the column type against
+the dbt mart `.sql` first (dbt is canon).
+
+- **$** → Currency, 1 dp; display units Trillions on universe pages 1–5,
+  Billions on the single-company Page 6 + the gauge.
+- **%** → Percentage, 1 dp (ratios are stored as decimals in the marts,
+  so PBI ×100).
+- **debt_to_equity** → 2 dp + an "x" suffix (it's a multiple, not a %).
+- **counts / rank / fiscal_year** → whole number, NO thousands separator
+  (else "2,024").
+- **Naming:** strip "Sum of …", "by fiscal_year", and any leaked measure
+  name from axis/legend/tooltip labels; gics_sector→Sector,
+  entity_name→Company, ticker→Ticker. Double-click a field in the Build
+  pane to rename it for that visual — fixes the axis title AND the
+  tooltip label in one move.
+
+### 2.12 Dynamic format strings — and the cartesian-axis limit (locked session 11)
+
+This Desktop build exposes NO static "Custom" entry in either the
+Measure-tools Format dropdown or the Model-view Properties Format
+dropdown. To scale a real number to "$1.7T" in a tooltip, or to render
+D/E as "4.20x" in a matrix, use a **Dynamic format string**: Measure
+tools → Format → Dynamic → replace the format expression with a DAX
+string.
+
+- Scaled trillions: `"$#,##0,,,,.0""T"""` — four commas **immediately
+  left of the decimal** = ÷10¹² (commas placed after the decimals render
+  as literals, not scaling).
+- Conditional unit (D/E only): `IF(SELECTEDVALUE('Ratio Names'[Ratio]) =
+  "Debt to equity", "0.00""x""", "0.0%")`.
+
+**Critical limit (doc-verified):** dynamic format strings render in
+cards, tooltips, and matrices, but **NOT on a cartesian axis** — setting
+the axis Display units to None blanks the labels, Trillions double-stacks
+to "$0TT". So for axis-bound trajectory measures (Revenue/Net Income All
+Years, etc.) keep the measure on plain Currency 0 dp — the tooltip shows
+the precise $ figure (acceptable: the axis is the glanceable layer, the
+tooltip is the exact layer) and the visual's Display units = Trillions
+format the axis. Sources: Learn desktop-custom-format-strings +
+desktop-dynamic-format-strings (updated 2026-02).
+
+### 2.13 Snapshot-versioned marts: never chart a raw `Sum of <column>` (locked session 11)
+
+The Date Range slicer spans multiple `as_of_date` snapshots. Any visual
+that drags a raw mart column (implicit `Sum of revenue` etc.) sums it
+across every snapshot in range → silent ~N× inflation (Page-3 scatter:
+WMT showed $1.94T, ~3× its real ~$0.65T). **Fix pattern — a
+latest-snapshot-pinned per-company measure:**
+
+```DAX
+Company Revenue =
+VAR Snap = MAX ( mart_financial_health[as_of_date] )
+VAR FY = CALCULATE ( MAX ( mart_financial_health[fiscal_year] ), mart_financial_health[as_of_date] = Snap )
+RETURN
+CALCULATE ( SUM ( mart_financial_health[revenue] ), mart_financial_health[as_of_date] = Snap, mart_financial_health[fiscal_year] = FY )
+```
+
+No ≥80 guard, so it resolves per-row/per-company (one scatter bubble
+each). Built Company Revenue / Company Net Margin / Company Assets on this
+pattern.
+
+### 2.14 Conditional formatting with inverted logic = "Field value", not Rules (locked session 11)
+
+Rules-based background-colour formatting on a measure that carries
+inverted logic is unreliable — it silently colours off the raw value
+(the Page-4 D/E inversion never reached the cell, so high-leverage
+Financials showed green). Microsoft's documented route for custom colour
+logic is **"Color by field values"**: a measure returning a hex string,
+cf Format style = **Field value**.
+
+```DAX
+Ratio Δ colour =
+VAR d = IF ( SELECTEDVALUE ( 'Ratio Names'[Ratio] ) = "Debt to equity", -[Ratio Δ (sector v S&P)], [Ratio Δ (sector v S&P)] )
+RETURN IF ( d < 0, "#F4B7B7", "#A9D08E" )
+```
+
+Only surfaced at smoke-test because Financials is the first HIGH-leverage
+sector tested — IT/Energy/All all had D/E ≤ benchmark. **Smoke-test
+inverted/threshold logic against a value on BOTH sides of the threshold.**
+
+### 2.15 ≥80-CIK guard blanks under a single-sector/company filter — REMOVEFILTERS band-aid (locked session 11)
+
+The `(Latest FY)` measure family finds `LatestCompleteFY` via
+`DISTINCTCOUNT(cik) >= 80` with no `REMOVEFILTERS`. Under any single
+sector (~12 CIKs) or single company, the guard never reaches 80 →
+`LatestCompleteFY` blanks → the measure blanks (and `KPI Latest`'s `… &
+"T"` leaves a stray "T"). Edit-interactions "None" does NOT fix it (the
+filter reaches the measure through the model, not only the slicer).
+**Interim fix:** wrap the measure in `CALCULATE(<expr>,
+REMOVEFILTERS(dim_company))` → universe-stable, still honours Date Range
+(`as_of_date` is untouched). Applied to the 4 Page-1 KPI measures. **The
+real fix is the Phase-6 dbt `is_latest_complete_fy` flag** which retires
+the whole guard family — see Risk note + PROJECT_CONTEXT Next phase.
+
+---
+
 ## 3. Five-page redesign spec
 
 Each page leverages something specific to its source mart's shape and
