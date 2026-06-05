@@ -326,6 +326,36 @@ yoy_ranked AS (
     FROM yoy y
 ),
 
+fy_coverage AS (
+    -- is_latest_complete_fy flag (Phase 6 session 1, 2026-06-05). Per-FY
+    -- distinct-company coverage measured AT THE LATEST as_of_date snapshot
+    -- only. Pushes the >=80-CIK "Latest FY" rule out of Power BI DAX into
+    -- dbt: the DAX version recomputed coverage via
+    -- CALCULATE(MAX(fiscal_year), FILTER(VALUES(fiscal_year),
+    -- DISTINCTCOUNT(cik) >= 80)) which returns BLANK under a single-company
+    -- (drill-through) or single-sector (~12 CIKs) filter — neither ever
+    -- reaches 80. A precomputed column is drill-safe (no recompute under a
+    -- narrow filter) and auto-advancing (recomputed each rebuild as FY2025/26
+    -- coverage fills in). COUNT(DISTINCT cik) collapses the 2 canonicals
+    -- (revenue + net_income) per company to one company count.
+    SELECT
+        fiscal_year,
+        COUNT(DISTINCT cik) AS n_ciks
+    FROM yoy_ranked
+    WHERE as_of_date = (SELECT MAX(as_of_date) FROM yoy_ranked)
+    GROUP BY fiscal_year
+),
+
+latest_complete_fy AS (
+    -- Scalar: the MAX fiscal_year clearing the coverage threshold
+    -- (var latest_fy_min_ciks, default 80 of 107). NULL if no year clears
+    -- (e.g. a partial first extract) — the COALESCE in hashed then makes the
+    -- flag uniformly false. Single-row, CROSS JOIN'd into the final SELECT.
+    SELECT MAX(fiscal_year) AS latest_complete_fy
+    FROM fy_coverage
+    WHERE n_ciks >= {{ var('latest_fy_min_ciks') }}
+),
+
 hashed AS (
     -- Compute the mart surrogate PK + project final shape + lineage
     -- columns. SHA-256 chain identical to every other Silver-layer hash
@@ -349,9 +379,11 @@ hashed AS (
         period_end_date,
         yoy_pct,
         yoy_rank,
+        COALESCE(yr.fiscal_year = lc.latest_complete_fy, false) AS is_latest_complete_fy,
         CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp(6)) AS load_datetime,
         'mart.mart_pl_trend' AS record_source
-    FROM yoy_ranked
+    FROM yoy_ranked yr
+    CROSS JOIN latest_complete_fy lc
 )
 
 SELECT * FROM hashed

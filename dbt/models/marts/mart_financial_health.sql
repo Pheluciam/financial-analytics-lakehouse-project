@@ -404,6 +404,31 @@ with_ratios AS (
     FROM derived d
 ),
 
+fy_coverage AS (
+    -- is_latest_complete_fy flag (Phase 6 session 1, 2026-06-05) — same
+    -- definition + rationale as mart_pl_trend. Per-FY company coverage at
+    -- the latest as_of_date. This mart's grain is one row per
+    -- (cik, as_of_date, fiscal_year), so COUNT(DISTINCT cik) per fiscal_year
+    -- equals the per-year row count at the latest snapshot. Computed
+    -- independently here (each mart is self-contained / canon) but uses the
+    -- identical var threshold so both marts agree on the flagged year — a
+    -- coverage query at verify time asserts the agreement.
+    SELECT
+        fiscal_year,
+        COUNT(DISTINCT cik) AS n_ciks
+    FROM with_ratios
+    WHERE as_of_date = (SELECT MAX(as_of_date) FROM with_ratios)
+    GROUP BY fiscal_year
+),
+
+latest_complete_fy AS (
+    -- Scalar MAX fiscal_year clearing var latest_fy_min_ciks (default 80 of
+    -- 107). NULL if none clears -> flag uniformly false via COALESCE.
+    SELECT MAX(fiscal_year) AS latest_complete_fy
+    FROM fy_coverage
+    WHERE n_ciks >= {{ var('latest_fy_min_ciks') }}
+),
+
 hashed AS (
     -- Surrogate PK + final shape + lineage. SHA-256 chain matches the
     -- prior 2 marts (Risk 4 + Risk 6).
@@ -435,9 +460,11 @@ hashed AS (
         debt_to_equity,
         operating_cf_margin,
         cash_to_assets,
+        COALESCE(wr.fiscal_year = lc.latest_complete_fy, false) AS is_latest_complete_fy,
         CAST(current_timestamp AT TIME ZONE 'UTC' AS timestamp(6)) AS load_datetime,
         'mart.mart_financial_health' AS record_source
-    FROM with_ratios
+    FROM with_ratios wr
+    CROSS JOIN latest_complete_fy lc
 )
 
 SELECT * FROM hashed

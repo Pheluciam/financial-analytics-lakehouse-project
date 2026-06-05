@@ -1888,6 +1888,45 @@ Bronze extract), so SUM over-counts 10x. Documented as the analyst-
 facing aggregation convention for the mart in `GOLD_MARTS_PIPELINE.md`
 section 10.4. Saved as `powerbi/04_smoke_test_phase_4_session_4.pbix`.
 
+### 9.7 Phase 6 session 1 — `is_latest_complete_fy` flag (retires the ≥80-CIK Latest-FY DAX family)
+
+Shipped 2026-06-05, first Phase 6 session. A boolean
+`is_latest_complete_fy` column was added to `mart_pl_trend` +
+`mart_financial_health`. It is TRUE on the most recent `fiscal_year` that
+has reached reporting completeness — at least `var('latest_fy_min_ciks')`
+(80 of the 107 S&P 100 CIKs) reporting that year, measured at the latest
+`as_of_date` snapshot.
+
+**Why push it into dbt.** Power BI previously recomputed this rule in DAX
+as `CALCULATE(MAX(fiscal_year), FILTER(VALUES(fiscal_year),
+DISTINCTCOUNT(cik) >= 80))`. That works on universe pages but returns
+BLANK whenever the filter context narrows below 80 CIKs — a single-company
+drill-through, or a single-sector slicer (~12 CIKs) — which forced two
+band-aids (a Page-6 columns-and-pin workaround, and a session-11
+`REMOVEFILTERS(dim_company)` wrap on the four Page-1 KPI measures). A
+precomputed column is drill-safe (no recompute under a narrow filter) and
+auto-advancing (each rebuild rolls the flagged year forward as coverage
+fills in).
+
+**Mechanic.** Two CTEs near the tail of each mart: `fy_coverage`
+(`COUNT(DISTINCT cik)` per `fiscal_year`, filtered to the latest
+`as_of_date`) and `latest_complete_fy` (scalar `MAX(fiscal_year)` clearing
+the var). The scalar is CROSS JOIN'd into the final SELECT and the column
+is `COALESCE(fiscal_year = latest_complete_fy, false)` — never NULL.
+Year-marker semantics: the flag is TRUE on the flagged year across ALL
+snapshots; per-snapshot pinning stays the consumer's job (Date Range
+slicer + `MAX(as_of_date)`), so the flag can't double-count. The threshold
+lives in `dbt_project.yml` `vars.latest_fy_min_ciks` so both marts share
+one source and agree on the flagged year (asserted at verify time).
+
+**Verify.** `dbt run` PASS=2, `dbt test` PASS=48 (2 new `not_null`). The
+coverage query confirms each mart flags exactly one year and both agree —
+FY2025 at the current extract. FY2026 already exists for the Jan/Feb
+fiscal-year-end filers but is correctly NOT flagged (<80 CIKs), proving
+the flag dodges the partial-cohort trap. Downstream, `mart_growth_forecast`
+is unaffected — its historical leg selects explicit columns from
+`mart_pl_trend`, so the new column is not pulled into the UNION.
+
 ## 10. Verification surface (per session)
 
 Each dbt session ships with a verification suite parallel to Phase 1's

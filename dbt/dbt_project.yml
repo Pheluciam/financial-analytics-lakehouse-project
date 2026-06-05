@@ -45,6 +45,20 @@ clean-targets:
   - "dbt_packages"
   - "logs"
 
+# Project-level vars. Single source of truth for cross-mart constants so
+# the two consumers can't drift.
+#
+# latest_fy_min_ciks — minimum distinct S&P 100 CIKs (of 107) that must
+# have reported a fiscal_year, AT THE LATEST as_of_date, for that year to
+# count as a "complete" reporting year. Drives the is_latest_complete_fy
+# boolean in mart_pl_trend + mart_financial_health (Phase 6 session 1,
+# 2026-06-05). Pushes the >=80-CIK "Latest FY" rule out of Power BI DAX
+# (where the DISTINCTCOUNT recompute blanked under single-company /
+# single-sector filters) into dbt — drill-safe + auto-advancing. 80 of
+# 107 = ~75% coverage threshold.
+vars:
+  latest_fy_min_ciks: 80
+
 # Default materializations per layer. Per-model configs in {{ config(...) }}
 # blocks override these defaults. Models drive configs — only layers with
 # actual models declare defaults here. Unused-layer configs trigger dbt's

@@ -198,6 +198,23 @@ models:
         tests:
           - not_null
 
+      - name: is_latest_complete_fy
+        description: |
+          Boolean. TRUE on rows whose fiscal_year is the most recent
+          "complete" reporting year — the MAX fiscal_year for which at
+          least var('latest_fy_min_ciks') (80 of 107 S&P 100 CIKs) have
+          reported, measured AT THE LATEST as_of_date snapshot. Computed
+          once in dbt (fy_coverage + latest_complete_fy CTEs) and applied
+          to every row of the flagged year across all snapshots; FALSE
+          elsewhere, never NULL (COALESCE'd). Phase 6 session 1
+          (2026-06-05). Replaces the Power BI DAX ">=80-CIK Latest FY"
+          measure family, whose DISTINCTCOUNT(cik) recompute blanked under
+          single-company (drill-through) and single-sector filters. PBI
+          consumers filter is_latest_complete_fy = TRUE instead of
+          recomputing the threshold. Drill-safe + auto-advancing.
+        tests:
+          - not_null
+
       - name: load_datetime
         description: |
           UTC timestamp(6) recording when this mart row was materialized
@@ -614,6 +631,19 @@ models:
         description: |
           cash_and_equivalents / assets (DOUBLE). NULL-safe. Rough
           liquidity proxy at the asset-share level.
+
+      - name: is_latest_complete_fy
+        description: |
+          Boolean. TRUE on rows whose fiscal_year is the most recent
+          "complete" reporting year — the MAX fiscal_year for which at
+          least var('latest_fy_min_ciks') (80 of 107 S&P 100 CIKs) have
+          reported, measured AT THE LATEST as_of_date snapshot. Same
+          definition + var as mart_pl_trend, computed independently here;
+          both marts agree on the flagged year (asserted at verify time).
+          Phase 6 session 1 (2026-06-05). Replaces the Power BI DAX
+          ">=80-CIK Latest FY" measure family; drill-safe + auto-advancing.
+        tests:
+          - not_null
 
       - name: load_datetime
         description: |
