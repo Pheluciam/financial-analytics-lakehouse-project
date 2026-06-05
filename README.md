@@ -13,7 +13,7 @@ The third project in a portfolio sequence demonstrating end-to-end data
 engineering work. Project #3 ingests US public-company corporate-finance
 data from the SEC EDGAR API, models it as Data Vault 2.0 inside a Bronze
 / Silver / Gold medallion architecture on AWS-native infrastructure, and
-surfaces it through a polished 5-page Power BI report.
+surfaces it through a polished 6-page Power BI report.
 
 Full architecture, decision history, and phase-by-phase delivery plan in
 `PROJECT_PLAN.md`. Running session state in `PROJECT_CONTEXT.md`.
@@ -54,14 +54,16 @@ financial-analytics-lakehouse-project/
 └── *.md                    # PROJECT_PLAN, PROJECT_CONTEXT, *_PIPELINE walkthroughs, LEARNINGS
 ```
 
-
 ## How this project was built
 
 This project was built using AI-assisted pair programming (Claude by Anthropic).
 All architecture decisions, technology selections, and final design choices are
 my own; the AI accelerated implementation and acted as a senior-DE code reviewer.
 The intent of the project is portfolio learning — every component was built with
-explicit understanding of what
+explicit understanding of what it does and why. Layer-by-layer
+walkthroughs live in the `*_PIPELINE.md` files; decision records and
+diagnosis → fix → lesson loops are in `LEARNINGS.md`.
+
 ## Project documents
 
 - `PROJECT_PLAN.md` — locked stack, decisions, phase delivery plan
