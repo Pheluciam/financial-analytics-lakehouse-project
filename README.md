@@ -7,16 +7,39 @@
 
 **Status: COMPLETE — 2026-06-05.** End-to-end and interview-ready: Bronze (S3 raw SEC EDGAR) → Data Vault 2.0 warehouse (Glue / Athena / Iceberg) → canonical Gold marts → 6-page Power BI executive suite → AWS Step Functions orchestration → keyless GitHub OIDC CI/CD with a dbt-build-plus-verify gate. Full build history, design decisions and the risk log live in `PROJECT_CONTEXT.md` and `LEARNINGS.md`.
 
-## What this project is
+## What this project demonstrates
 
-The third project in a portfolio sequence demonstrating end-to-end data
-engineering work. Project #3 ingests US public-company corporate-finance
-data from the SEC EDGAR API, models it as Data Vault 2.0 inside a Bronze
-/ Silver / Gold medallion architecture on AWS-native infrastructure, and
-surfaces it through a polished 6-page Power BI report.
+- **End-to-end lakehouse** from a public API source (SEC EDGAR) to a BI dashboard
+- **AWS-native lakehouse** — S3 (raw) + Glue Data Catalog + Athena (serverless SQL) + Apache Iceberg table format
+- **Data Vault 2.0** warehouse (hubs / links / satellites + PIT & bridge) inside a Bronze / Silver / Gold medallion
+- **Canonical-concept mapping** collapsing heterogeneous SEC XBRL tags to stable financial concepts (seed-driven)
+- **dbt-athena** transformations with singular + cross-mart data tests and a coverage regression guard
+- **Orchestration** via AWS Step Functions (Glue Python Shell dbt build → 14-branch Athena verify fan-out)
+- **Keyless GitHub OIDC CI/CD** deploying the project and running the orchestrator as an end-to-end gate
+- **Univariate revenue forecasting** layer (Holt-Winters) conformed into the marts
+- **6-page Power BI** executive report (Import mode — opens standalone for reviewers)
 
-Full architecture, decision history, and phase-by-phase delivery plan in
-`PROJECT_PLAN.md`. Running session state in `PROJECT_CONTEXT.md`.
+## Architecture
+
+```mermaid
+flowchart LR
+    SEC["SEC EDGAR API (XBRL)"]
+    S3[("Amazon S3 — Bronze raw JSON")]
+    GLUE["AWS Glue Data Catalog"]
+    ATH["Amazon Athena (dbt-athena)"]
+    ICE[("Apache Iceberg — Silver + Gold marts")]
+    PBI["Power BI — 6-page report"]
+    SFN["AWS Step Functions"]
+    GH["GitHub Actions — OIDC CI/CD"]
+
+    SEC -->|Python extract| S3
+    S3 -->|dbt sources| ATH
+    GLUE --- ATH
+    ATH -->|staging to warehouse to marts| ICE
+    ICE -->|native connector| PBI
+    SFN -.->|dbt build then 14-branch verify| ATH
+    GH -.->|deploy + run orchestrator| SFN
+```
 
 ## Stack
 
@@ -124,3 +147,15 @@ CAGR acceleration scatter, and a Top 10 forecast-CAGR bar.
 Per-company drill-through: a KPI strip, a 15-year P&L line, an 8-ratio
 Company / Sector / S&P 100 matrix, and a revenue-vs-sector gauge. Reached by
 drilling from the Executive Overview top-movers and scatters.
+
+## Related projects
+
+Part of a three-project data-engineering portfolio:
+
+- **Project #1 — CDC NT Transport Analytics** — dbt-first pipeline on PostgreSQL → Power BI; Kimball modelling foundation.
+- **Project #2 — Retail Demand & Forecasting** — cloud warehouse + orchestration: Azure SQL → Snowflake → Airflow (Docker) → dbt → Power BI, with a Cortex forecast layer.
+- **Project #3 — S&P 100 Financial Analytics Lakehouse** *(this one)* — AWS-native lakehouse: S3 + Glue + Athena + Iceberg, dbt-athena, Step Functions, 6-page Power BI, keyless OIDC CI/CD.
+
+## Author
+
+Phil McKechnie — Business Intelligence Analyst & Developer, Melbourne. 15+ years across operations, supply chain and analytics; the last 5 in dedicated BI roles (SQL, Tableau, Power BI). Building a data-engineering portfolio across dbt, cloud warehouses and AWS-native lakehouse work.
