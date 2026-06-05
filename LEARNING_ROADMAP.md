@@ -359,3 +359,103 @@ Sessions tracked in the training-journey-project's own session log; the log itse
   - **Career target context honestly reframed**: Dropped Analytics Engineer as primary target (US-coined title, low AU volume — the 2026-05-23 framing called it out as a primary, today's research shows it's a stretch). Primary targets are now Senior DA with pipeline / BI Developer / BI Engineer / Senior Reporting Analyst (in Melbourne volume order). Analytics Engineer kept as stretch target. Mid-level DE remains the longer-term direction, achievable after 1-2 years in-role per the verified AU BA/DA-to-DE progression path. Salary expectations grounded in Robert Half / Hays 2026 guides (Senior DA ~$120K-$130K).
 - 2026-05-28 (continued) — **Forward-projected risk pass at end of Phase 2 session 3.** Phil challenged the engineering-standards criterion 7 audit after today's debug loops surfaced query-pattern issues the data-shape-only audit didn't catch. Three forward-projected risks surfaced via restricted-domain web-search-verify against authoritative docs: (1) AutomateDV does NOT officially support dbt-Athena (verified directly against automate-dv.readthedocs.io Platform Support page) — Phase 2 warehouse-layer Data Vault 2.0 will be hand-rolled in plain dbt-athena SQL, NOT AutomateDV. Actually a stronger portfolio story (shows pattern understanding, not just library use); (2) Iceberg merge incremental + on_schema_change has a known duplicate-insertion bug (dbt-adapters issue #571) — real risk for SCD-2 satellites where duplicates corrupt audit lineage; mitigation: avoid on_schema_change on satellites, carefully control unique_key composition; (3) AWS Step Functions has NO native dbt integration — Step Functions can invoke Athena natively but to run dbt commands needs Lambda (250 MB layer limit tight), ECS Fargate task, or Glue Python Shell job. Phase 3 design call required at kickoff. ENGINEERING_STANDARDS.md criterion 7 strengthened to include consumption-pattern contracts in addition to data-shape contracts. New standing rule added: phase-kickoff forward-verify pass against authoritative docs before any phase work begins, findings banked in LEARNINGS.md as "Phase N projected risks."
 - 2026-05-23 (continued) — **AI-assistance disclosure convention locked across all 8 portfolio repos.** Driver: AI-assisted coding is the 2026 default (76% of developers per Stack Overflow 2024 survey, reaffirmed in 2025) and honest disclosure is the most professional signal — demonstrates modern tooling fluency + ownership of design decisions + pre-empts awkward interview moments. Convention: every public-facing GitHub README (3 main + 5 mini) includes a short "How this project was built" section with the standing template (paste-able template lives in TEACHING_PREFERENCES.md under "Anything else Claude should know"). Disclosure does NOT appear in CV / cover letter — different convention. Interview posture if asked: confident ownership ("I can walk through any line and explain why it's there"). Consolidation work to defend that promise lives in the 6-8 week training journey AFTER the mini-projects ship. When PROJECT_PLAN.md / PROJECT_CONTEXT.md are authored at Phase 0 they will include explicit reference to this convention; when each project's README is authored, the disclosure block goes in alongside the architecture diagram and demo runbook.
+
+---
+
+## 2026-06-05 update — mini-projects cut to THREE + CV title decision
+
+**CV title decision (pending edit).** Phil to change the CV/profile title from
+"Business Intelligence Analyst and Data Engineer" to **"Business Intelligence
+Analyst & Developer"** — "Developer" is a recognised, in-demand AU/Melbourne
+title that matches advertised BI Developer postings and is an honest step up
+from BI Analyst without overreach. Decisions confirmed this session: DROP
+"Analytics Engineer" as a target/title (US term, not the AU market) and DO NOT
+use "in progress" (reads unprofessional). CV not edited yet — Phil sending CVs
+in a day or two; apply the title change then.
+
+**Target-role reframe (market-checked 2026-06-05, SEEK Melbourne).** Realistic
+next rungs from BI Analyst & Programmer: **BI Developer / Senior Business
+Analyst / Senior Data Analyst**, Microsoft-stack-heavy in Melbourne (SQL +
+Power BI + DAX + data modelling; Microsoft Fabric + Azure Data Factory rising
+fast; Tableau as the Power BI alternative — and Phil already has deep paid
+Tableau at NEC, so a Tableau mini-project is NOT needed). Senior BA (data)
+contracts ~$850-915/day. "Analytics Engineer" is dropped as a stated target.
+
+**Mini-projects block: 5 -> 3 (locked 2026-06-05).** Phil has 3 strong main
+projects + the training journey for consolidation; three well-targeted minis
+beat five. Final three (merge, not just cut):
+
+1. **T-SQL + Azure Data Factory.** Small flat CSV (or simple flat API) ->
+   Azure SQL -> stored procs / MERGE / views -> small ADF pipeline -> Power BI.
+   Builds on Project #2 Azure SQL. Hits Microsoft-stack BI Developer postings.
+2. **Microsoft Fabric end-to-end.** Small clean dataset -> Fabric notebook
+   light transform -> Fabric warehouse -> Power BI. Fastest-rising Melbourne
+   keyword.
+3. **dbt depth + dbt Cloud CI/CD** (merges old slots 1 + 4). REUSE Project #2
+   or #3 modelled data (no new data wrangling). Advanced tests/macros +
+   materialization tuning + dbt Cloud scheduled job + slim CI. Fastest of the
+   three.
+
+**DROPPED:** Iceberg vs Delta (narrowest, most DE-leaning, least matched to
+targets; Iceberg already covered in Project #3). Old slot 1 (dbt Cloud + CI/CD)
+folded into mini #3.
+
+**HARD SCOPE GUARDRAIL (Phil's explicit ask 2026-06-05).** Target 3-5 days
+each at ~6 hrs/day (2-3 sessions). The deliverable is the TECHNIQUE, not a data
+pipeline. **Data must be tiny and already clean** — if a dataset needs
+unpivoting / nested-JSON parsing / overnight loads / audit campaigns, pick a
+different dataset. Every main-project blowout (M5 unpivot, overnight loads,
+nested JSON, 20+ audits) was data pain; minis must avoid it by construction.
+For minis #1 and #2 the time risk shifts from data to ENVIRONMENT SETUP (Azure
+trial, Fabric / M365 dev tenant) — create those accounts BEFORE the clock
+starts. If any slot passes 5 days, cut scope; do not extend.
+
+**BI-tool note.** No Tableau mini needed (deep paid Tableau at NEC). All three
+minis pair with Power BI, consistent with the Microsoft-stack targeting.
+
+### 2026-06-05 correction — mini #3 revised (new data + Tableau output)
+
+Phil's call: do NOT reuse Project #2/#3 data for mini #3, and it must ship a
+Tableau workbook (proves Tableau independently, not just claimed via the NEC
+role). Revised mini #3:
+
+**3. dbt depth on a fresh dataset -> Tableau workbook.**
+- NEW small, already-clean public dataset (not reused). Candidates: F1/Ergast
+  results (recommended — clean, multi-table, Tableau-friendly), a clean retail
+  orders set (on-brand, avoid overused "Superstore"), or any tidy Kaggle
+  multi-table set.
+- Warehouse: local PostgreSQL (Phil already knows it from Project #1) +
+  dbt-postgres. Smooth Tableau connectivity (native PostgreSQL connector).
+- dbt depth lead theme: testing + macros (custom generic tests, dbt-utils +
+  dbt-expectations, a reusable macro) + one incremental model + one snapshot if
+  time. Keep ONE lead theme so it doesn't sprawl.
+- Output: Tableau PUBLIC workbook (free, shareable live link). Tableau Desktop
+  is a 14-day trial; use Public for the portfolio.
+
+Genuinely-new content = dbt depth + Tableau output; Postgres + publishing are
+known, so the small-clean-data guardrail keeps it to ~4-5 days. (Supersedes the
+"reuse Project #2/#3 data" framing in the 2026-06-05 three-project lock above.)
+
+### 2026-06-05 lock — MANDATORY data pre-flight gate before every mini-project
+
+Standing rule for all three minis (Phil's explicit ask). Before any dataset is
+committed to a mini-project, run a quick data pre-flight / extract-audit and
+get Phil's sign-off. The blowouts on the main projects were ALL data pain
+(M5 unpivot, overnight loads, nested JSON, 20+ audits); this gate exists to
+catch that BEFORE the clock starts, not mid-build.
+
+Pre-flight checklist (15-30 min, done together at each mini kickoff):
+1. Actually DOWNLOAD + open the file(s) — don't trust the dataset's description.
+2. Shape check: row count (target small — thousands to low-hundred-thousands,
+   not tens of millions), column count, file size, number of tables.
+3. Cleanliness check: already flat/tidy? No unpivot needed? No deeply nested
+   JSON? Sensible types, few nulls, no encoding mess, no overnight load?
+4. Relational check (for the dbt mini): a few clean joinable tables for
+   modelling + tests — not one giant flat dump, not a hairball.
+5. Licence/access check: genuinely public + redistributable; stable URL.
+6. GO / NO-GO: if it fails any check, pick a different dataset. Two-three
+   candidates pre-screened per slot; choose the cleanest. Do NOT proceed on a
+   "we'll clean it as we go" dataset — that's the exact trap to avoid.
+
+Output of the gate: a one-paragraph data-audit note banked in that mini's repo
+README before modelling starts.

@@ -172,3 +172,59 @@ loops are captured in `LEARNINGS.md`.
 - `LEARNINGS.md` — diagnosis → fix → lesson loops
 - `GLOSSARY.md` — term definitions
 - `TEACHING_PREFERENCES.md` — working conventions (committed for transparency)
+
+## Dashboard
+
+Six interactive pages built in Power BI Desktop on top of the dbt Gold marts.
+Import storage mode — the `.pbix` opens standalone for portfolio reviewers (data
+baked into the file). Live report: `powerbi/financial_analytics.pbix`.
+
+### Executive Overview
+
+![Executive Overview](powerbi/screenshots/01_executive_overview.png)
+
+Headline KPIs across the S&P 100 universe — Total Revenue, Net Income, Net Margin
+and Revenue YoY % at the latest complete fiscal year ($9.9T / $1.5T / 14.9%) —
+over a multi-year revenue trend, with top revenue movers and margin/return
+scatters. The landing page: the whole universe at a glance, slicer-responsive by
+sector.
+
+### P&L Trend Deep-Dive
+
+![P&L Trend Deep-Dive](powerbi/screenshots/02_p_and_l_trend.png)
+
+Long-run profit-and-loss trajectory — revenue, net income and margin across
+fiscal years, with sector and company breakdowns.
+
+### Peer Benchmarking
+
+![Peer Benchmarking](powerbi/screenshots/03_peer_benchmark.png)
+
+Company-versus-peer comparison on the headline financials, ranking constituents
+within their sector and against the S&P 100.
+
+### Financial Health
+
+![Financial Health](powerbi/screenshots/04_financial_health.png)
+
+Eight canonical ratios in a Sector vs S&P 100 matrix with traffic-light
+formatting; a net-income rank-movement ribbon chart (2009-2024) telling the
+"Tech overtook Financials" story; and a multi-ratio sector trajectory line
+(net margin / ROE / ROA).
+
+### Growth & Forecast
+
+![Growth & Forecast](powerbi/screenshots/05_growth_and_forecast.png)
+
+A cohort-locked revenue trajectory — solid actuals → dashed forecast → 95%
+confidence fan — plus a forecast-highlights KPI strip, a historical-vs-forecast
+CAGR acceleration scatter, and a Top 10 forecast-CAGR bar.
+
+### Company Detail (drill-through)
+
+![Company Detail](powerbi/screenshots/06_company_details.png)
+
+Per-company drill-through page: a KPI strip, a 15-year P&L line, an 8-ratio
+Company / Sector / S&P 100 matrix, and a revenue-vs-sector gauge. Reached by
+drilling from the Executive Overview top-movers (ticker) and the scatters
+(entity name).
