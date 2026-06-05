@@ -1,0 +1,83 @@
+# .github/workflows/deploy.yml
+#
+# Phase 6 session 2 (2026-06-05) — CI/CD for the lakehouse, replacing the
+# manual `python scripts/sync_*.py` / `deploy_state_machine.py` deploy step.
+#
+# On every push to main that touches the transformation or orchestration
+# surface, this workflow: (1) deploys the dbt project + Glue wrapper to S3,
+# (2) deploys the Step Functions definition, then (3) triggers one
+# orchestrator run (Glue dbt build -> 14-branch Athena verify) and waits,
+# failing the build unless the execution SUCCEEDED. That is the end-to-end
+# "dbt -> verify runs clean" gate.
+#
+# Bronze extraction (scripts/extract_sec_edgar.py) is deliberately NOT in
+# CI — the Bronze layer is frozen for demo durability (LEARNINGS Risk 7),
+# so the pipeline transforms + verifies the existing raw zone rather than
+# re-pulling from SEC EDGAR on every push.
+#
+# AUTH: keyless GitHub OIDC. No long-lived AWS keys live in GitHub. The
+# workflow assumes an IAM role via aws-actions/configure-aws-credentials@v6.
+# One-time AWS setup (documented in ORCHESTRATION_PIPELINE.md section 4):
+#   1. Create a GitHub OIDC identity provider in IAM
+#      (token.actions.githubusercontent.com, audience sts.amazonaws.com).
+#   2. Create role `github-actions-lakehouse-deploy` with a trust policy
+#      scoped to this repo/branch (sub: repo:<owner>/<repo>:ref:refs/heads/main)
+#      and a permissions policy covering: s3:PutObject on the lakehouse
+#      bucket, states:UpdateStateMachine + states:StartExecution +
+#      states:DescribeExecution on financial-analytics-orchestrator.
+#   3. Set repo variable AWS_DEPLOY_ROLE_ARN to that role's ARN.
+
+name: deploy-lakehouse
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dbt/**"
+      - "scripts/**"
+      - "stepfunctions/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch: {}
+
+# Least-privilege token: id-token for OIDC, read-only repo checkout.
+permissions:
+  id-token: write
+  contents: read
+
+# One deploy at a time; cancel a superseded in-flight run on the same ref.
+concurrency:
+  group: deploy-lakehouse-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  deploy-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install deploy dependencies
+        run: pip install "boto3>=1.34.0" "python-dotenv>=1.0.0"
+
+      - name: Configure AWS credentials (OIDC, keyless)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy dbt project + Glue wrapper to S3
+        run: python scripts/sync_phase3_artifacts_to_s3.py
+
+      - name: Deploy Step Functions definition
+        run: python scripts/deploy_state_machine.py
+
+      - name: Run orchestrator (dbt build -> verify) and wait
+        run: python scripts/run_orchestrator.py

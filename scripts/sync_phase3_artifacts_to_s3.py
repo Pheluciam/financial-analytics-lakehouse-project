@@ -1,7 +1,13 @@
-"""One-shot sync of dbt project + Glue wrapper to S3 for Phase 3 orchestration.
+"""Sync dbt project + Glue wrapper to S3 for the orchestration deploy.
 
-Reads AWS credentials from .env (phil-admin keys at AWS_ACCESS_KEY_ID /
-AWS_SECRET_ACCESS_KEY). Run from project root::
+Credentials resolve via the boto3 default credential chain (Phase 6
+session 2 CI/CD unification, 2026-06-05). Locally, ``load_dotenv()``
+exports the phil-admin keys from ``.env`` into the environment where the
+default chain picks them up; in GitHub Actions, the keyless OIDC role
+assumed by aws-actions/configure-aws-credentials@v6 exports temporary
+credentials (incl. a session token) the same way. No explicit-key boto3
+client — that path cannot carry the OIDC session token. Run locally from
+project root::
 
     python scripts/sync_phase3_artifacts_to_s3.py
 
@@ -14,7 +20,8 @@ The Glue Python Shell job ``financial-analytics-dbt-build`` consumes both
 prefixes: ScriptLocation points at the wrapper, the wrapper's
 ``dbt_project_s3_uri`` Glue arg points at the dbt project prefix.
 
-Phase 3 manual deploy step. Replaced by CI/CD push at Phase 6.
+Invoked by .github/workflows/deploy.yml on push to main (Phase 6
+session 2); still runnable by hand for ad-hoc deploys.
 """
 
 from __future__ import annotations
@@ -43,11 +50,12 @@ EXCLUDE_FILES = {".user.yml", ".env"}
 
 
 def main() -> int:
+    # Default credential chain — reads AWS_ACCESS_KEY_ID / _SECRET_ACCESS_KEY
+    # / _SESSION_TOKEN from the environment. load_dotenv() above populates
+    # them from .env locally; OIDC populates them in CI.
     s3 = boto3.client(
         "s3",
         region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
-        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
     )
 
     print(f"Syncing {DBT_LOCAL}/ -> s3://{BUCKET}/{DBT_REMOTE_PREFIX}")

@@ -232,3 +232,87 @@ Monitor:
 - Glue Console → financial-analytics-dbt-build → Runs tab for the underlying Glue execution.
 - CloudWatch `/aws-glue/python-jobs/output` log stream for the wrapper + dbt stdout.
 - Athena Console → Recent queries to confirm dbt-1.9.10-tagged queries at the run window.
+
+## 7. CI/CD (Phase 6 session 2, 2026-06-05)
+
+The manual deploy in section 6 is now wrapped by GitHub Actions
+(`.github/workflows/deploy.yml`). The manual path still works for ad-hoc
+deploys; CI is the default on push to `main`.
+
+**Trigger.** Push to `main` touching `dbt/**`, `scripts/**`,
+`stepfunctions/**`, or the workflow file (plus `workflow_dispatch` for
+manual runs).
+
+**Job `deploy-and-verify` (ubuntu-latest).**
+
+1. `actions/checkout@v6`.
+2. `actions/setup-python@v6` (3.11) + `pip install boto3 python-dotenv`.
+3. `aws-actions/configure-aws-credentials@v6` — keyless OIDC assume-role.
+4. `python scripts/sync_phase3_artifacts_to_s3.py` — dbt project + Glue
+   wrapper to S3.
+5. `python scripts/deploy_state_machine.py` — Step Functions definition.
+6. `python scripts/run_orchestrator.py` — start ONE orchestrator run
+   (Glue dbt build → 14-branch Athena verify) and poll to terminal;
+   non-zero exit unless `SUCCEEDED`. This is the end-to-end gate.
+
+Bronze extraction (`scripts/extract_sec_edgar.py`) is deliberately NOT in
+CI — the raw zone is frozen for demo durability (LEARNINGS Risk 7). CI
+transforms + verifies the existing Bronze rather than re-pulling SEC EDGAR.
+
+**Auth — keyless OIDC, no stored AWS keys.** The workflow declares
+`permissions: id-token: write` and passes `role-to-assume` with no static
+keys, which signals configure-aws-credentials to exchange the GitHub OIDC
+JWT for temporary AWS credentials. The deploy scripts resolve credentials
+via the boto3 default credential chain (`.env` locally, OIDC-exported env
+incl. session token in CI) — no explicit-key clients, which could not
+carry the OIDC session token.
+
+**One-time AWS setup (Phil, console or IaC).**
+
+1. Create an IAM **GitHub OIDC identity provider**: provider URL
+   `https://token.actions.githubusercontent.com`, audience
+   `sts.amazonaws.com`.
+2. Create IAM role **`github-actions-lakehouse-deploy`** with:
+   - Trust policy: federated principal = the OIDC provider; condition
+     `token.actions.githubusercontent.com:sub` =
+     `repo:<owner>/<repo>:ref:refs/heads/main` (scope to repo + branch);
+     audience condition `:aud` = `sts.amazonaws.com`.
+   - Permissions policy: `s3:PutObject` on
+     `arn:aws:s3:::phil-financial-analytics-lakehouse/*`;
+     `states:UpdateStateMachine`, `states:StartExecution`,
+     `states:DescribeExecution` on the
+     `financial-analytics-orchestrator` state machine.
+3. Set GitHub repo variable **`AWS_DEPLOY_ROLE_ARN`** to that role's ARN.
+
+Monitor a CI run: Actions tab → deploy-lakehouse run → the
+"Run orchestrator" step streams the polled execution status; drill into
+the Step Functions execution for the per-branch verify graph.
+
+## 7. CI/CD (Phase 6 session 2, 2026-06-05)
+
+The manual deploy in section 6 is now wrapped by GitHub Actions (`.github/workflows/deploy.yml`). The manual path still works for ad-hoc deploys; CI is the default on push to `main`.
+
+**Trigger.** Push to `main` touching `dbt/**`, `scripts/**`, `stepfunctions/**`, or the workflow file (plus `workflow_dispatch` for manual runs).
+
+**Job `deploy-and-verify` (ubuntu-latest).**
+
+1. `actions/checkout@v6`.
+2. `actions/setup-python@v6` (3.11) + `pip install boto3 python-dotenv`.
+3. `aws-actions/configure-aws-credentials@v6` — keyless OIDC assume-role.
+4. `python scripts/sync_phase3_artifacts_to_s3.py` — dbt project + Glue wrapper to S3.
+5. `python scripts/deploy_state_machine.py` — Step Functions definition.
+6. `python scripts/run_orchestrator.py` — start ONE orchestrator run (Glue dbt build -> 14-branch Athena verify) and poll to terminal; non-zero exit unless `SUCCEEDED`. This is the end-to-end gate.
+
+Bronze extraction (`scripts/extract_sec_edgar.py`) is deliberately NOT in CI — the raw zone is frozen for demo durability (LEARNINGS Risk 7). CI transforms + verifies the existing Bronze rather than re-pulling SEC EDGAR.
+
+**Auth — keyless OIDC, no stored AWS keys.** The workflow declares `permissions: id-token: write` and passes `role-to-assume` with no static keys, which signals configure-aws-credentials to exchange the GitHub OIDC JWT for temporary AWS credentials. The deploy scripts resolve credentials via the boto3 default credential chain (`.env` locally, OIDC-exported env incl. session token in CI) — no explicit-key clients, which could not carry the OIDC session token.
+
+**One-time AWS setup (Phil, console or IaC).**
+
+1. Create an IAM GitHub OIDC identity provider: provider URL `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`.
+2. Create IAM role `github-actions-lakehouse-deploy` with:
+   - Trust policy: federated principal = the OIDC provider; condition `token.actions.githubusercontent.com:sub` = `repo:<owner>/<repo>:ref:refs/heads/main` (scope to repo + branch); audience condition `:aud` = `sts.amazonaws.com`.
+   - Permissions policy: `s3:PutObject` on `arn:aws:s3:::phil-financial-analytics-lakehouse/*`; `states:UpdateStateMachine`, `states:StartExecution`, `states:DescribeExecution` on the `financial-analytics-orchestrator` state machine.
+3. Set GitHub repo variable `AWS_DEPLOY_ROLE_ARN` to that role's ARN.
+
+Monitor a CI run: Actions tab -> deploy-lakehouse run -> the "Run orchestrator" step streams the polled execution status; drill into the Step Functions execution for the per-branch verify graph.
