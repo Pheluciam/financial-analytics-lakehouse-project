@@ -30,13 +30,10 @@
 name: deploy-lakehouse
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "dbt/**"
-      - "scripts/**"
-      - "stepfunctions/**"
-      - ".github/workflows/deploy.yml"
+  # Manual-only: this workflow never runs on push, so it never shows a
+  # failed (red X) run before the one-time AWS OIDC setup exists. Trigger
+  # it by hand from the Actions tab (Run workflow) once the deploy role +
+  # AWS_DEPLOY_ROLE_ARN repo variable are in place (ORCHESTRATION §7).
   workflow_dispatch: {}
 
 # Least-privilege token: id-token for OIDC, read-only repo checkout.
