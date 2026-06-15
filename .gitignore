@@ -40,6 +40,10 @@ ENV/
 Thumbs.db
 desktop.ini
 
+# Personal learning-journey docs — kept locally, not part of this repo
+LEARNING_ROADMAP.md
+MINI1_KICKOFF.md
+
 # Local data scratch — bronze / silver / gold live on S3, not in the repo
 data/
 output/
