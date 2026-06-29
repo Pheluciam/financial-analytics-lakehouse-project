@@ -4,7 +4,7 @@
 > `dbt/` directory contents and the Phase 1 walkthrough in
 > `EXTRACT_PIPELINE.md`.
 >
-> Status: STUB. Authored 2026-05-25 (Phase 2 session 1).
+> Status: COMPLETE (Phase 2+). Authored 2026-05-25 (Phase 2 session 1).
 > Sections 1-6 shipped session 1 (scaffolding + first staging model).
 > Sections 7+ expand as intermediate / warehouse / Data Vault 2.0 models
 > land in later Phase 2 sessions. Phase 4 Gold marts get their own

@@ -1,6 +1,6 @@
-# Glossary of Terms — Retail Demand & Forecasting Pipeline
+# Data Engineering Glossary
 
-> A working vocabulary for this project and a carry-forward reference for future
+> A working vocabulary built across my data-engineering projects and a carry-forward reference for future
 > data engineering work. General terms (data engineering fundamentals, SQL,
 > Python, Git) are written so they can be lifted straight into the next project.
 > Project-specific entries are tagged `[Project 2]`.

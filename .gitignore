@@ -43,6 +43,7 @@ desktop.ini
 # Personal learning-journey docs — kept locally, not part of this repo
 LEARNING_ROADMAP.md
 MINI1_KICKOFF.md
+TEACHING_PREFERENCES.md
 
 # Local data scratch — bronze / silver / gold live on S3, not in the repo
 data/
@@ -60,3 +61,7 @@ dbt/.user.yml
 dbt/target/
 dbt/dbt_packages/
 dbt/logs/
+
+# Local snapshot of curated S3 data (silver/bronze/gold) pulled before teardown.
+# Too large for git; kept locally for offline study + interview demos.
+data_snapshot/

@@ -4,8 +4,8 @@
 > `scripts/extract_sec_edgar.py` (session 2 deliverable) and
 > `scripts/smoke_test_aws.py` (session 1 deliverable).
 >
-> Status: STUB. Authored 2026-05-23 (Phase 1 session 1). Expanded in
-> session 2 as the extract script is built and tested at the 1 → 10 → 100
+> Status: COMPLETE (Phase 1). Authored 2026-05-23 (session 1), expanded in
+> session 2 as the extract script was built and tested at the 1 → 10 → 100
 > step-up.
 
 ---

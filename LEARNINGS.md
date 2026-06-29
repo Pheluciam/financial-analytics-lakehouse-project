@@ -1,7 +1,8 @@
-# LEARNINGS.md — Retail Demand & Forecasting Pipeline
+# LEARNINGS — financial-analytics-lakehouse-project (Project #3)
 
-> A running journal of what I'm learning on Project #2.
-> First entry: 2026-05-09.
+> A running journal of what clicked, broke, or reshaped my thinking — Project #3
+> lessons first, Project #2 carry-forward below.
+> First entry: 2026-05-09 (Project #2). Project #3 from 2026-05-23.
 
 This is my second data engineering project, building on what I learned in Project #1
 (CDC NT Transport). The point of this document isn't to look polished. It's to capture
@@ -3431,45 +3432,3 @@ end-to-end dbt-build-plus-verify gate. 62 Risks banked across the
 journey; structural + semantic dbt test suite green; coverage regression
 guard in place. Databricks (mini-project slot 2) and the next portfolio
 project pick up from here.
-
----
-
-## Phase 6 session 2 — Risk 55 RESOLVED-by-prior-fixes + CI/CD (2026-06-05)
-
-#### Risk 55 — CLOSED. Sector-specific revenue tag-mapping gap was already healed before the dedicated mapping-expansion session ran.
-
-**Going in.** The plan was the documented 2-4 hour fix: expand the canonical revenue tag-mapping (canonical_concepts_dictionary + canonical_concept_tag_preference seeds) plus the 6 lock-step Jinja {% set concepts %} lists (int_sec_edgar__concepts + 5 warehouse models), cascade-rebuild, re-verify. Per the standing "dbt mart is canon — verify against data, not specs" + Risk 13 "empirical probe over inferred parity" locks, session 2 opened with a diagnostic BEFORE touching a single seed.
-
-**Diagnostic (single consolidated Athena query, 2026-06-05).** Per-FY revenue coverage at the latest snapshot + a per-(year, company) gap list with each gap company's actual us-gaap revenue-family tags. Result:
-
-- FY2022 / 2023 / 2024 / 2025 all at 100% universe revenue coverage (107/107). FY2025 universe revenue = $9.91T — vs the Risk 55 banking-day figure of $8.88T and the estimated true ~$10T. The 10-12% sector-concentrated undercount is gone.
-- The only low-coverage rows were pre-2016 sparse-XBRL history (expected) and the in-progress FY2026 calendar year (only the 7 Jan/Feb-FYE filers have filed — not a defect).
-- The lone recurring historical gap (BLK 2015-2021) files Revenues + RevenueFromContractWithCustomerExcludingAssessedTax — both already mapped. So even that residue is NOT a tag-mapping gap; it's a dedup/anchor artifact, out of Risk 55's scope.
-
-**Root cause of the silent heal.** Two fixes shipped for other reasons closed Risk 55 as a side effect: (1) the InterestAndDividendIncomeOperating revenue alias add (banks); (2) Risk 58's re-anchor of mart fiscal_year to year(period_end_date) (Phase 5 session 3), which recovered the 52/53-week filer + comparative-year rows the old fy-attribute filter was dropping. Every bank missing in the Risk 55 banking (GS, MS, WFC, JPM, C, BAC, PNC, SPGI) now reports FY2025 revenue.
-
-**Decision (senior-DE, build-mode).** Do NOT run the speculative 8-file seed/Jinja expansion + full cascade + Power BI re-import on closeout day. The data proves it would not move FY2022-2025 (already 100%) and the only incremental cells it could fill are a handful of 2015-2017 utility years (RevenueFromContractWithCustomerIncludingAssessedTax / RegulatedAndUnregulatedOperatingRevenue) immaterial to every headline the dashboard shows. A rebuild + re-import carries more regression risk than value. Verify proved the work wasn't needed — the highest-value outcome a forward-verify pass can produce.
-
-**Shipped instead.** sql/verify/19_phase6_revenue_coverage_audit.sql — a permanent regression guard (the carry-forward the Risk 55 entry itself proposed): per-canonical coverage on the latest complete FY + the two prior complete FYs must hold >= 95% of the universe, plus a $9.5T revenue reconciliation floor; FAILs at the SQL layer if a future mapping or roster regression silently reopens the gap before it can surface as a BI surprise. Bar + universe size derived from sp100_company_sector at runtime so the checks self-adjust to roster changes.
-
-**Carry-forward.** When a Risk is banked with a quantified impact, the FIRST step of the dedicated fix session is to re-measure that exact metric — fixes shipped for adjacent reasons routinely heal it early. "Verify before you build" applies to closing Risks, not just opening phases. Ship the regression guard regardless, so the closed Risk can't silently reopen.
-
-#### CI/CD — keyless GitHub OIDC deploy + end-to-end orchestrator gate.
-
-**Forward-verify (current docs, not training).** Confirmed live action majors: actions/checkout@v6, actions/setup-python@v6, aws-actions/configure-aws-credentials@v6. OIDC pattern: permissions id-token: write + role-to-assume with no static keys signals the action to exchange the GitHub OIDC JWT for temporary AWS credentials.
-
-**Decision.** Keyless OIDC over static GitHub secrets — no long-lived AWS keys stored in GitHub; the deploy role is assumed per-run. The portfolio story is "keyless CI/CD to AWS."
-
-**Surfaced code change (the forward-verify earning its keep).** The two deploy scripts built explicit-key boto3 clients from .env — a path that cannot carry the OIDC session token, so it would have failed in CI. Unified both (sync_phase3_artifacts_to_s3.py, deploy_state_machine.py) onto the boto3 default credential chain: load_dotenv() exports .env keys into the env locally; OIDC exports temporary creds (incl. session token) the same way in CI. One code path, both environments.
-
-**Wiring.** .github/workflows/deploy.yml runs on push to main touching dbt/scripts/stepfunctions: checkout -> setup-python -> install boto3 -> OIDC assume-role -> deploy dbt+wrapper to S3 -> deploy state machine -> new scripts/run_orchestrator.py starts ONE orchestrator execution (Glue dbt build -> 14-branch Athena verify) and polls to terminal, exiting non-zero unless SUCCEEDED. That makes "dbt -> verify runs clean" a literal CI gate. Bronze extraction stays OUT of CI by design (frozen for demo durability, Risk 7) — CI transforms + verifies the existing raw zone.
-
-**One-time AWS setup (Phil, documented in ORCHESTRATION_PIPELINE.md section 7).** IAM GitHub OIDC provider + github-actions-lakehouse-deploy role (trust scoped to repo + refs/heads/main; permissions: s3:PutObject on the lakehouse bucket, states:UpdateStateMachine / StartExecution / DescribeExecution on the orchestrator) + repo variable AWS_DEPLOY_ROLE_ARN.
-
-**Carry-forward.** Any auth-mode switch (static keys -> OIDC) is also a credential-resolution change in every script the CI invokes. Audit each deploy script's boto3 client construction at the same time as writing the workflow — the explicit-key client is the silent breakage that only surfaces on the first CI run.
-
----
-
-## PROJECT #3 — COMPLETE (2026-06-05)
-
-Phase 6 session 2 closes the build. Bronze (S3 raw SEC EDGAR) -> intermediate + Data Vault 2.0 warehouse (Glue/Athena/Iceberg) -> canonical-collapsed Gold marts -> 6-page Power BI executive suite -> Step Functions orchestration -> keyless GitHub OIDC CI/CD with an end-to-end dbt-build-plus-verify gate. 62 Risks banked across the journey; structural + semantic dbt test suite green; coverage regression guard in place. Databricks (mini-project slot 2) and the next portfolio project pick up from here.
